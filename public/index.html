@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>eB2B Mock Seller</title>
-  <meta name="description" content="Mock ONDC eB2B (DigiDukaan) Seller NP for buyer-app developers - every scenario as a playable flow.">
+  <meta name="description" content="Mock ONDC eB2B (DigiDukaan) Seller NP for buyer-app developers: your app calls it, it answers per the scenario you activate.">
   <link rel="icon" href="/img/seller.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -13,7 +13,7 @@
     <div class="wrap">
       <div class="brand">
         <h1>eB2B Mock Seller NP</h1>
-        <p>ONDC:RETeB2B · core 1.2.5 · pre-order, offers and post-order scenarios</p>
+        <p>ONDC:RETeB2B · core 1.2.5 · your buyer app calls the mock; the mock answers per the scenario you activate</p>
       </div>
       <div class="endpoint">
         <span class="label">bpp_uri</span>
@@ -23,25 +23,33 @@
     </div>
   </header>
 
-  <nav class="tabs wrap" role="tablist">
-    <button role="tab" data-tab="scenarios" aria-selected="true">Scenarios</button>
-    <button role="tab" data-tab="catalogue">Catalogue</button>
-    <button role="tab" data-tab="retailers">Retailers</button>
-  </nav>
-
   <main class="wrap">
+    <section class="card target">
+      <label>Your buyer app's bap_id <input id="bapId" placeholder="e.g. ondc.test.bms.qwipo.com" spellcheck="false"></label>
+      <p class="hint" id="targetHint"></p>
+    </section>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="scenarios" aria-selected="true">Scenarios</button>
+      <button role="tab" data-tab="activity">Activity <span class="count" id="activityCount"></span></button>
+      <button role="tab" data-tab="catalogue">Catalogue</button>
+      <button role="tab" data-tab="retailers">Retailers</button>
+    </nav>
+
     <section id="tab-scenarios" class="tab">
-      <section class="card target">
-        <div class="target-fields">
-          <label>Buyer app bap_uri <input id="bapUri" placeholder="https://your-buyer-app/ondc" spellcheck="false"></label>
-          <label>bap_id <input id="bapId" placeholder="defaults to the bap_uri host" spellcheck="false"></label>
-        </div>
-        <p class="hint" id="targetHint"></p>
-      </section>
       <div class="split">
         <aside id="scenarioList" class="scenario-list"></aside>
         <div id="scenarioRun"></div>
       </div>
+    </section>
+
+    <section id="tab-activity" class="tab" hidden>
+      <div id="orders"></div>
+      <div class="activity-head">
+        <h2>Calls from your buyer app</h2>
+        <span class="muted" id="activityState"></span>
+      </div>
+      <div id="activity" class="out"></div>
     </section>
 
     <section id="tab-catalogue" class="tab" hidden>

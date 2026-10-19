@@ -82,8 +82,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 
 
 .target { margin-bottom: 20px; }
-.target-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
-.target label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.target label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); max-width: 560px; }
 .target .hint { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
 button.play { background: var(--ok); border-color: var(--ok); color: #fff; }
 .scenario-item { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; text-align: left; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 8px; font-weight: 500; padding: 7px 10px; }
@@ -103,10 +102,26 @@ button.play { background: var(--ok); border-color: var(--ok); color: #fff; }
 .spacer { flex: 1; }
 .step-out:not(:empty) { margin-top: 12px; }
 
-/* seller mode for a real buyer app */
-.arm { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
-.arm label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-.arm label.grow { flex: 1 1 240px; }
+/* activation + buyer instructions */
+.activation { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.activation.is-active { border-color: var(--ok); }
+.activation-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.activation label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.activation .hint, .hint { margin: 0; font-size: 13px; color: var(--muted); }
+.buyer-steps { margin: 0 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
+.buyer-step { display: flex; flex-direction: column; gap: 3px; font-size: 14px; }
+.who { display: inline-block; min-width: 96px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.simulation { margin-top: 16px; }
+.simulation > summary { cursor: pointer; margin-bottom: 4px; }
+.simulation[open] > summary { margin-bottom: 12px; }
+.activity-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin: 16px 0 8px; }
+.activity-head h2 { margin: 0; font-size: 18px; }
+.count { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 11px; line-height: 18px; text-align: center; }
+.count:empty { display: none; }
+td.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+td.actions button { padding: 4px 10px; font-size: 12px; }
+button.danger { color: var(--bad); border-color: var(--bad); }
+main > .tabs { padding: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 
 /* cart editor */
 .cart { margin-bottom: 12px; }
@@ -120,6 +135,5 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 
 @media (max-width: 900px) {
   .split { grid-template-columns: minmax(0, 1fr); }
-  .target-fields { grid-template-columns: minmax(0, 1fr); }
-  .scenario-list h4 { flex-basis: 100%; }
+    .scenario-list h4 { flex-basis: 100%; }
 }

@@ -38,13 +38,17 @@ const scaleToMov = (s) => {
   return s.cart.map((l) => ({ ...l, count: l.count * factor }));
 };
 
+const cartText = (s, lines) => lines.map((l) => `${l.id} ${catalogItem(s, l.id)?.descriptor.name ?? ''} × ${l.count}`).join(', ');
+
 // ---- steps ----------------------------------------------------------------------------------
-// A step: { name, action, expect, build(env, state), absorb(state, reply), check(reply, state) }.
-// `action` is the ONDC endpoint, or 'push' for the mock seller acting on its own. `expect` may be a
-// function of state (it names the affected item).
+// A step: { name, action, buyer(state), expect, build(env, state), absorb(state, reply), check(reply, state) }.
+// `action` is the ONDC endpoint the buyer app calls, or 'push' for a seller action. `buyer` says what
+// to do in the buyer app to make that call. `expect` may be a function of state (it names the
+// affected item). build/absorb/check drive the simulation and the tests.
 
 const searchStep = () => ({
   name: 'search → on_search', action: 'search',
+  buyer: () => 'Open the catalogue: the app sends a broadcast /search.',
   expect: 'Full catalogue (header full): 3 providers with locations, items, variant groups, offers and pan-India serviceability.',
   build: ({ bap }) => R.searchBroadcast({ bap }),
   absorb: (s, reply) => (s.catalog = cbBody(reply).message.catalog['bpp/providers']),
@@ -53,6 +57,7 @@ const searchStep = () => ({
 
 const p2pStep = (name, build, expect, check) => ({
   name, action: 'search', expect, build,
+  buyer: () => 'Identify the retailer: the app sends a P2P /search (bpp_id set, fulfillment.customer).',
   absorb: (s, reply) => {
     // The last callback carries the customer id (for a new retailer, the unsolicited "created" one).
     const p = cbBody(reply).message.catalog['bpp/providers'].find((x) => x.id === s.providerId);
@@ -64,8 +69,11 @@ const p2pStep = (name, build, expect, check) => ({
 
 // /select. `lines` defaults to the scenario's cart; it can be a function of state (a re-select built
 // from the seller's reply).
-const selectStep = ({ lines, expect = 'Serviceable quote.', check, reselect = false } = {}) => ({
+const selectStep = ({ lines, expect = 'Serviceable quote.', check, reselect = false, buyer } = {}) => ({
   name: reselect ? 're-select → on_select' : 'select → on_select', action: 'select', expect, needsCatalog: true,
+  buyer: buyer ?? ((s) => (reselect
+    ? (Array.isArray(lines) ? `Change the cart to ${cartText(s, lines)}: the app sends /select again.` : 'Accept the seller\'s changes to the cart: the app sends /select again.')
+    : `Add ${cartText(s, lines ?? s.cart)} from ${s.providerId} and open the cart: the app sends /select.`)),
   build: (env, s) => {
     const req = R.select({
       ...env, catalogProvider: providerOf(s), retailer: s.retailer,
@@ -82,6 +90,11 @@ const selectStep = ({ lines, expect = 'Serviceable quote.', check, reselect = fa
 // `offers`: the buyer's offer selection; omitted, the buyer keeps what on_select applied.
 const initStep = ({ name = 'init → on_init', fulfillmentId, paymentType, offers, expect = 'Quote, payment and settlement terms, bpp_terms and (for a known retailer) credit.', check } = {}) => ({
   name, action: 'init', expect,
+  buyer: () => ['Go to checkout: the app sends /init',
+    fulfillmentId ? ` with delivery option ${fulfillmentId}` : '',
+    paymentType === 'ON-ORDER' ? ', paying online (ON-ORDER)' : '',
+    offers ? ` with the offers ${offers.join(' + ')} selected` : ' keeping the offers on_select applied',
+    '.'].join(''),
   build: (env, s) => R.init({ ...env, selectRequest: s.selectRequest, onSelect: s.onSelect, retailer: s.retailer, paymentType, fulfillmentId, offers }),
   absorb: (s, reply) => (s.onInit = cbBody(reply)),
   check: check ?? ((reply) => all(noError(reply), quoteAddsUp(reply))),
@@ -89,6 +102,7 @@ const initStep = ({ name = 'init → on_init', fulfillmentId, paymentType, offer
 
 const confirmStep = ({ expect = 'Order Accepted, fulfillment Pending, same quote as on_init.', check } = {}) => ({
   name: 'confirm → on_confirm', action: 'confirm', expect,
+  buyer: () => 'Place the order: the app sends /confirm.',
   build: (env, s) => R.confirm({ ...env, onInit: s.onInit, onSelect: s.onSelect, retailer: s.retailer }),
   absorb: (s, reply) => (s.onConfirm = cbBody(reply)),
   check: check ?? ((reply, s) => all(noError(reply), quoteAddsUp(reply), fail(order(reply).state === 'Accepted', `state ${order(reply).state}`),
@@ -97,13 +111,16 @@ const confirmStep = ({ expect = 'Order Accepted, fulfillment Pending, same quote
 
 const statusStep = () => ({
   name: 'status → on_status', action: 'status',
+  buyer: () => 'Open / refresh the order: the app sends /status.',
   expect: 'The confirmed order as the seller holds it: state Accepted, fulfillment Pending.',
   build: (env, s) => R.status({ ...env, onConfirm: s.onConfirm }),
   check: (reply) => fail(order(reply)?.state === 'Accepted', `state ${order(reply)?.state}`),
 });
 
+const PUSH_LABELS = { packed: 'Packed', out_for_delivery: 'Out for delivery', delivered: 'Delivered', seller_cancel: 'Seller cancels' };
 const pushStep = (event, name, expect, [orderState, fulfillmentState]) => ({
-  name, action: 'push', expect,
+  name, action: 'push', expect, event,
+  buyer: () => `Seller action - nothing to do in the app: in the Activity tab press "${PUSH_LABELS[event]}" on the order. The app receives it.`,
   build: (env, s) => R.sellerPush({ onConfirm: s.onConfirm, event }),
   check: (reply) => fail(order(reply)?.state === orderState && order(reply)?.fulfillments[0].state.descriptor.code === fulfillmentState,
     `expected ${orderState} / ${fulfillmentState}, got ${order(reply)?.state} / ${order(reply)?.fulfillments?.[0]?.state?.descriptor?.code}`),
@@ -111,6 +128,7 @@ const pushStep = (event, name, expect, [orderState, fulfillmentState]) => ({
 
 const cancelStep = () => ({
   name: 'cancel → on_cancel', action: 'cancel',
+  buyer: () => 'Cancel the order from the app: it sends /cancel (reason 053).',
   expect: 'Order Cancelled, cancellation.reason.id 053 (buyer) - pre-order-service records it as cancelled by the CUSTOMER.',
   build: (env, s) => R.cancel({ ...env, onConfirm: s.onConfirm }),
   check: (reply) => fail(order(reply)?.state === 'Cancelled' && order(reply)?.cancellation?.reason?.id === '053', 'expected Cancelled with reason 053'),
@@ -228,7 +246,8 @@ export const SCENARIOS = [
     steps: [
       selectStep({ expect: (s) => `Cart ${cartValue(s, s.cart).toFixed(2)} < ${minOrderValue(s).toFixed(2)}: error 30023 with the quote still present (pre-order-service shows MOV_NOT_MET).`,
         check: (r) => fail(errorCode(r) === '30023' && order(r)?.quote, 'expected 30023 with a quote - is the cart below the minimum order value?') }),
-      selectStep({ reselect: true, lines: scaleToMov, expect: 'Quantities scaled up to reach the minimum order value: no error.' }),
+      selectStep({ reselect: true, lines: scaleToMov, expect: 'Quantities scaled up to reach the minimum order value: no error.',
+        buyer: (s) => `Add items until the cart reaches ₹${minOrderValue(s).toFixed(2)}: the app sends /select again.` }),
       initStep(),
       confirmStep(),
     ],
@@ -452,4 +471,6 @@ export async function runScenario(scenario, { bap, bpp, send, previewSend, cart,
   return state;
 }
 
+export { PUSH_LABELS };
+export const buyerText = (step, state) => (state.catalog || !step.needsCatalog ? step.buyer(state) : '');
 export const expectText = (step, state) => (typeof step.expect === 'function' ? (state.catalog ? step.expect(state) : 'Shown once the catalogue has loaded.') : step.expect);

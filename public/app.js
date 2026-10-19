@@ -1,6 +1,12 @@
-import { SCENARIOS, newState, runStep, expectText } from './shared/scenarios.js';
+import { SCENARIOS, newState, runStep, expectText, buyerText, PUSH_LABELS } from './shared/scenarios.js';
 import { RETAILERS, NEW_RETAILER, WALK_IN_RETAILER } from './shared/retailers.js';
 import * as R from './shared/requests.js';
+
+// The buyer app makes every ONDC call; the mock only answers. This page:
+//   - activates a scenario (the seller mode) for the buyer app's bap_id,
+//   - tells the developer what to do in the app, and shows the calls that arrive (Activity),
+//   - runs seller actions (fulfillment updates, seller cancel) on orders the app confirmed,
+//   - simulates any step in sync mode, which sends nothing to the buyer app.
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
@@ -14,6 +20,7 @@ const el = (tag, attrs = {}, ...kids) => {
   return n;
 };
 const json = (v) => JSON.stringify(v, null, 2);
+const post = (url, body, headers = {}) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }).then((r) => r.json());
 
 const BPP = { id: location.host, uri: `${location.origin}/ondc` };
 $('#bppUri').textContent = BPP.uri;
@@ -23,107 +30,60 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
 };
 
-// ---- buyer app target -----------------------------------------------------------------------
-// The callbacks of every request go to context.bap_uri + "/on_<action>", so the buyer app under
-// test is identified only by what is typed here.
-const bapUriInput = $('#bapUri');
+// ---- the buyer app --------------------------------------------------------------------------
 const bapIdInput = $('#bapId');
-bapUriInput.value = store.get('bapUri', '');
 bapIdInput.value = store.get('bapId', '');
+const bapId = () => bapIdInput.value.trim();
 
-function target() {
-  const uri = bapUriInput.value.trim().replace(/\/$/, '');
-  if (!uri) return null;
-  try {
-    return { id: bapIdInput.value.trim() || new URL(uri).host, uri };
-  } catch {
-    return null;
-  }
-}
-function refreshTarget() {
-  store.set('bapUri', bapUriInput.value.trim());
-  store.set('bapId', bapIdInput.value.trim());
-  const t = target();
-  bapUriInput.classList.toggle('needs', !t);
-  $('#targetHint').replaceChildren(...(t
-    ? ['▶ POSTs each callback to ', el('code', {}, `${t.uri}/on_<action>`), ' as ', el('code', {}, t.id), ' and shows what your buyer app answered.']
-    : [el('b', {}, 'Enter your buyer app\'s bap_uri to enable ▶.'), ' Without it you can still Preview every callback.']));
-  for (const b of document.querySelectorAll('[data-needs-target]')) refreshButton(b);
-  armBtn.disabled = !t;
-  armBtn.title = t ? '' : 'Enter your buyer app\'s bap_uri above';
-}
-bapUriInput.oninput = refreshTarget;
-bapIdInput.oninput = refreshTarget;
-
-const env = () => ({ bap: target() ?? R.BAP, bpp: BPP });
-
-// ---- seller mode for a real buyer app -------------------------------------------------------
-// A buyer app calling the mock directly sends no X-Mock-Mode, so the mode is armed for its bap_id.
 const MODE_LABELS = {
   normal: 'Normal', item_inactive: 'Item inactive', out_of_stock: 'Out of stock', partial_quantity: 'Partial quantity',
   price_changed: 'Price changed', init_qty_reduced: 'Quantity reduced at init', confirm_rejected: 'Seller rejects confirm',
 };
-const modeSelect = el('select', { id: 'armMode' }, Object.entries(MODE_LABELS).map(([v, l]) => el('option', { value: v }, l)));
-const modeItems = el('input', { id: 'armItems', placeholder: 'affected item ids, e.g. I1,I2 (default: first in cart)', spellcheck: 'false' });
-const modeStatus = el('span', { class: 'pill' }, '');
-const armBtn = el('button', { class: 'ghost', type: 'button' }, 'Arm for my bap_id');
-armBtn.onclick = async () => {
-  const t = target();
-  if (!t) return;
-  const res = await fetch('/api/mock/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bap_id: t.id, mode: modeSelect.value, items: modeItems.value }) });
-  showMode(await res.json());
-};
-function showMode(m) {
-  if (m.error) return (modeStatus.textContent = m.error), (modeStatus.className = 'pill bad');
-  modeStatus.textContent = `armed for ${m.bap_id}: ${MODE_LABELS[m.mode] ?? m.mode}${m.items?.length ? ` (${m.items.join(', ')})` : ''}`;
-  modeStatus.className = `pill ${m.mode === 'normal' ? '' : 'cb'}`;
-}
-async function loadMode() {
-  const t = target();
-  if (!t) return void (modeStatus.textContent = '');
-  const m = await (await fetch(`/api/mock/mode?bap_id=${encodeURIComponent(t.id)}`)).json();
-  modeSelect.value = m.mode ?? 'normal';
-  modeItems.value = (m.items ?? []).join(',');
-  showMode(m);
-}
-$('.target').append(el('div', { class: 'arm' },
-  el('label', {}, 'Seller mode when your buyer app calls the mock', modeSelect), el('label', { class: 'grow' }, 'Affected items', modeItems), armBtn, modeStatus));
-bapIdInput.addEventListener('change', loadMode);
-bapUriInput.addEventListener('change', loadMode);
-loadMode();
+let armed = null; // { mode, items, scenario } armed for bapId()
 
-// ---- transport ------------------------------------------------------------------------------
-// play: the mock delivers the callbacks to bap_uri and waits for the buyer app's reply.
-// preview: callbacks are only returned, nothing is POSTed.
-// 'push' is the mock seller acting on its own (fulfillment updates, seller cancel), not an ONDC call.
-// The scenario's seller mode always travels as X-Mock-Mode, so a mode armed for the bap_id
-// (for a real buyer app) never leaks into playground runs.
-async function send(action, body, { play }, mode = { name: 'normal', items: [] }) {
-  const headers = {
-    'Content-Type': 'application/json',
-    [play ? 'X-Mock-Deliver' : 'X-Mock-Sync']: play ? 'wait' : 'true',
-    'X-Mock-Mode': mode.name,
-    ...(mode.items?.length ? { 'X-Mock-Mode-Items': mode.items.join(',') } : {}),
-  };
-  const url = action === 'push' ? '/api/mock/push' : `/ondc/${action}`;
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-  return res.json();
+function refreshTarget() {
+  store.set('bapId', bapId());
+  bapIdInput.classList.toggle('needs', !bapId());
+  $('#targetHint').replaceChildren(...(bapId()
+    ? ['Point the app at ', el('code', {}, BPP.uri), '. Calls from ', el('code', {}, bapId()), ' are answered per the active scenario',
+      armed ? [': ', el('b', {}, SCENARIOS.find((x) => x.id === armed.scenario)?.title ?? MODE_LABELS[armed.mode]), ` (seller mode ${MODE_LABELS[armed.mode]}${armed.items?.length ? `, items ${armed.items.join(', ')}` : ''})`] : '', '.']
+    : [el('b', {}, 'Enter the bap_id your buyer app sends in context.bap_id.'), ' It is how the mock knows which scenario to apply and whose calls to show.']));
+  for (const b of document.querySelectorAll('[data-needs-bap]')) {
+    b.disabled = !bapId();
+    b.title = bapId() ? '' : 'Enter your buyer app\'s bap_id above';
+  }
 }
 
-document.addEventListener('click', async (e) => {
-  const sel = e.target.closest('[data-copy]')?.dataset.copy;
-  if (!sel) return;
-  const src = $(sel);
-  await navigator.clipboard.writeText(src.value ?? src.textContent);
-  e.target.textContent = 'Copied';
-  setTimeout(() => (e.target.textContent = 'Copy'), 1200);
+async function loadArmed() {
+  armed = null;
+  if (bapId()) {
+    const m = await fetch(`/api/mock/mode?bap_id=${encodeURIComponent(bapId())}`).then((r) => r.json());
+    armed = { mode: m.mode, items: m.items ?? [], scenario: m.scenario };
+  }
+  refreshTarget();
+  if (currentScenario) renderScenario(currentScenario);
+}
+let bapTimer;
+bapIdInput.addEventListener('input', () => {
+  refreshTarget();
+  clearTimeout(bapTimer);
+  bapTimer = setTimeout(() => { loadArmed(); pollActivity(true); }, 400);
 });
 
+// ---- rendering calls ------------------------------------------------------------------------
 const copyBtn = (getText) => el('button', { class: 'ghost', type: 'button', onclick: async (e) => {
   await navigator.clipboard.writeText(getText());
   e.target.textContent = 'Copied';
   setTimeout(() => (e.target.textContent = 'Copy'), 1200);
 } }, 'Copy');
+
+document.addEventListener('click', async (e) => {
+  const sel = e.target.closest('[data-copy]')?.dataset.copy;
+  if (!sel) return;
+  await navigator.clipboard.writeText($(sel).textContent);
+  e.target.textContent = 'Copied';
+  setTimeout(() => (e.target.textContent = 'Copy'), 1200);
+});
 
 function callBlock({ pill, pillClass, name, meta, sections, open = true, extra }) {
   const node = $('#tplCall').content.firstElementChild.cloneNode(true);
@@ -132,7 +92,7 @@ function callBlock({ pill, pillClass, name, meta, sections, open = true, extra }
   node.querySelector('.pill').classList.add(pillClass);
   node.querySelector('.name').textContent = name;
   node.querySelector('.meta').textContent = meta ?? '';
-  if (extra) node.querySelector('summary').append(extra);
+  if (extra) node.querySelector('summary').append(...[extra].flat().filter(Boolean));
   const body = node.querySelector('.call-body');
   for (const [title, value] of sections) {
     const text = typeof value === 'string' ? value : json(value);
@@ -147,20 +107,17 @@ function deliveryPill(d) {
   let ack = '';
   try { ack = JSON.parse(d.body).message?.ack?.status ?? ''; } catch { /* not JSON */ }
   const ok = d.status >= 200 && d.status < 300 && ack === 'ACK';
-  return el('span', { class: `pill ${ok ? 'ok' : 'bad'}` }, d.error ? `buyer app: ${d.error}` : `buyer app: ${d.status} ${ack || ''}`.trim());
+  return el('span', { class: `pill ${ok ? 'ok' : 'bad'}` }, d.error ? `buyer app: ${d.error}` : `buyer app: ${d.status} ${ack}`.trim());
 }
-const deliveriesOk = (reply) => (reply.callbacks ?? []).every((c) => !c.delivery || deliveryPill(c.delivery).classList.contains('ok'));
 
-function renderReply(container, reply, { request, action } = {}) {
-  const ok = reply.response?.message?.ack?.status === 'ACK';
-  if (request) container.append(callBlock({ pill: 'REQUEST', pillClass: 'cb', name: `/${action}`, sections: [['buyer request (built by the playground)', request]], open: false }));
-  container.append(callBlock({ pill: ok ? 'ACK' : 'NACK', pillClass: ok ? 'ok' : 'bad', name: 'mock sync response', sections: [['body', reply.response]], open: !ok }));
-  for (const c of reply.callbacks ?? []) {
-    const meta = [c.headers?.['X-ONDC-Search-Response'] && `X-ONDC-Search-Response: ${c.headers['X-ONDC-Search-Response']}`, c.delay_ms ? `unsolicited, after ${c.delay_ms / 1000}s` : null, `→ ${c.url}`].filter(Boolean).join(' · ');
+function callbackBlocks(callbacks, open) {
+  return (callbacks ?? []).map((c) => {
+    const meta = [c.headers?.['X-ONDC-Search-Response'] && `X-ONDC-Search-Response: ${c.headers['X-ONDC-Search-Response']}`, c.delay_ms ? `unsolicited, after ${c.delay_ms / 1000}s` : null, c.url && `→ ${c.url}`].filter(Boolean).join(' · ');
     const sections = [['callback body', c.body]];
     if (c.delivery) sections.push(['buyer app response', c.delivery.error ?? c.delivery.body ?? '']);
-    container.append(callBlock({ pill: 'CALLBACK', pillClass: 'cb', name: `/${c.body.context.action}`, meta, sections, open: !request, extra: deliveryPill(c.delivery) }));
-  }
+    const error = c.body.error ? el('span', { class: 'pill bad' }, `error ${c.body.error.code}`) : null;
+    return callBlock({ pill: 'CALLBACK', pillClass: 'cb', name: `/${c.body.context.action}`, meta, sections, open, extra: [error, deliveryPill(c.delivery)] });
+  });
 }
 
 // ---- tabs -----------------------------------------------------------------------------------
@@ -169,34 +126,127 @@ function showTab(name) {
   for (const s of document.querySelectorAll('.tab')) s.hidden = s.id !== `tab-${name}`;
   store.set('tab', name);
   if (name === 'catalogue') loadCatalogue();
+  if (name === 'activity') pollActivity(true);
 }
 for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => showTab(b.dataset.tab);
 
 // ---- scenarios ------------------------------------------------------------------------------
-// Why a button can't be pressed right now, or '' when it can. Shown as its tooltip.
-function blockedReason(btn) {
-  if (btn.dataset.busy === '1') return 'Running…';
-  if (btn.closest('.locked')) return 'Run the previous step first';
-  if (btn.dataset.needsTarget !== undefined && !target()) return 'Enter your buyer app\'s bap_uri above to play';
-  return '';
-}
-function refreshButton(btn) {
-  const reason = blockedReason(btn);
-  btn.disabled = Boolean(reason);
-  btn.title = reason;
-}
-function busy(btn, on) {
-  btn.dataset.busy = on ? '1' : '';
-  refreshButton(btn);
-}
-
-const label = (step) => (step.action === 'push' ? 'seller push (mock)' : `/${step.action} → /on_${step.action}`);
-
 let catalogPromise;
-const getCatalog = () => (catalogPromise ??= send('search', R.searchBroadcast(env()), { play: false }).then((r) => r.callbacks[0].body.message.catalog['bpp/providers']));
+const getCatalog = () => (catalogPromise ??= post('/ondc/search', R.searchBroadcast({ bap: R.BAP }), { 'X-Mock-Sync': 'true' })
+  .then((r) => r.callbacks[0].body.message.catalog['bpp/providers']));
 
-// Cart and affected item chosen in the editor, per scenario.
-const overrides = {};
+// Simulation only: sync mode, so nothing reaches the buyer app. The scenario's mode rides on the request.
+const simulate = (action, body, mode = { name: 'normal', items: [] }) => post(action === 'push' ? '/api/mock/push' : `/ondc/${action}`, body, {
+  'X-Mock-Sync': 'true',
+  'X-Mock-Mode': mode.name,
+  ...(mode.items?.length ? { 'X-Mock-Mode-Items': mode.items.join(',') } : {}),
+});
+
+const overrides = {}; // simulation cart / affected item per scenario
+let currentScenario;
+
+const isActive = (sc) => armed && armed.scenario === sc.id && armed.mode === (sc.mode ?? 'normal');
+
+async function activate(sc, items) {
+  const m = await post('/api/mock/mode', { bap_id: bapId(), mode: sc.mode ?? 'normal', items, scenario: sc.id });
+  if (m.error) return alertBox(m.error);
+  armed = { mode: m.mode, items: m.items, scenario: m.scenario };
+  refreshTarget();
+  renderScenario(sc);
+}
+async function deactivate(sc) {
+  await post('/api/mock/mode', { bap_id: bapId(), mode: 'normal' });
+  armed = { mode: 'normal', items: [], scenario: undefined };
+  refreshTarget();
+  renderScenario(sc);
+}
+const alertBox = (msg) => $('#scenarioRun').prepend(el('p', { class: 'pill bad' }, msg));
+
+function activationCard(sc) {
+  const active = isActive(sc);
+  const items = el('input', { placeholder: 'affected item ids, e.g. I1,I2 (default: the first item in the cart)', spellcheck: 'false', value: active ? (armed.items ?? []).join(',') : '' });
+  const activateBtn = el('button', { class: 'play', type: 'button', 'data-needs-bap': '' }, active ? 'Re-activate' : 'Activate for my bap_id');
+  activateBtn.onclick = () => activate(sc, items.value);
+  const offBtn = active && sc.mode ? el('button', { class: 'ghost', type: 'button', onclick: () => deactivate(sc) }, 'Back to normal') : null;
+  return el('div', { class: `card activation ${active ? 'is-active' : ''}` },
+    el('div', { class: 'activation-head' },
+      el('span', { class: `pill ${active ? 'ok' : ''}` }, active ? `active for ${bapId()}` : 'not active'),
+      el('span', { class: 'muted' }, `Seller mode: ${MODE_LABELS[sc.mode ?? 'normal']}`)),
+    sc.mode ? el('label', { class: 'grow' }, 'Affected items (optional)', items) : null,
+    el('div', { class: 'row' }, activateBtn, offBtn),
+    el('p', { class: 'hint' }, sc.mode
+      ? 'Once active, every call from your app gets this seller behaviour on the items it orders, until you switch back to normal (or 24h).'
+      : 'This scenario needs no special seller behaviour; activating sets the seller to normal for your app.'));
+}
+
+async function renderScenario(sc) {
+  currentScenario = sc;
+  store.set('scenario', sc.id);
+  for (const b of document.querySelectorAll('.scenario-item')) b.classList.toggle('current', b.dataset.id === sc.id);
+  const state = newState(sc, overrides[sc.id]);
+  state.catalog = await getCatalog();
+
+  const steps = sc.steps.map((step, i) => el('li', { class: 'buyer-step' },
+    el('div', {}, el('b', {}, step.name), ' ', el('code', {}, step.action === 'push' ? 'seller action' : `/${step.action} → /on_${step.action}`)),
+    el('div', {}, el('span', { class: 'who' }, step.action === 'push' ? 'Seller' : 'In your app'), buyerText(step, state)),
+    el('div', { class: 'muted' }, el('span', { class: 'who' }, 'Mock answers'), expectText(step, state))));
+
+  $('#scenarioRun').replaceChildren(
+    el('div', { class: 'run-head' },
+      el('div', {}, el('span', { class: 'pill' }, sc.group), el('h2', {}, sc.title), el('p', { class: 'muted' }, sc.summary))),
+    activationCard(sc),
+    el('h3', {}, 'What to do'),
+    el('ol', { class: 'buyer-steps' }, steps),
+    el('p', { class: 'hint' }, 'Watch the calls arrive in the ', el('a', { href: '#', onclick: (e) => { e.preventDefault(); showTab('activity'); } }, 'Activity'), ' tab.'),
+    simulation(sc, state),
+  );
+  refreshTarget();
+}
+
+// Simulation: the same steps run in sync mode against the mock, showing the request the app should
+// send and the callback it will get. Nothing is sent to the buyer app.
+function simulation(sc, state) {
+  const box = el('div', { class: 'out' });
+  let done = 0;
+  const mode = () => ({ name: state.mode, items: state.target ? [state.target] : [] });
+  const rows = sc.steps.map((step, i) => {
+    const out = el('div', { class: 'out step-out' });
+    const status = el('span', { class: 'pill' }, '');
+    const btn = el('button', { class: 'ghost', type: 'button' }, 'Simulate');
+    const row = el('div', { class: 'step' }, el('div', { class: 'step-head' }, el('span', { class: 'step-no' }, String(i + 1)), el('b', {}, step.name), status, el('span', { class: 'spacer' }), btn), out);
+    btn.onclick = async () => {
+      btn.disabled = true;
+      out.replaceChildren();
+      try {
+        const { request, reply, problem } = await runStep(step, state, { bap: R.BAP, bpp: BPP, send: (a, b) => simulate(a, b, mode()) });
+        out.append(
+          callBlock({ pill: 'REQUEST', pillClass: 'cb', name: step.action === 'push' ? 'seller action' : `/${step.action}`, sections: [[step.action === 'push' ? 'seller action' : 'what your app sends', request]], open: false }),
+          ...callbackBlocks(reply.callbacks, true));
+        status.textContent = problem ? `unexpected: ${problem}` : 'as expected';
+        status.className = `pill ${problem ? 'bad' : 'ok'}`;
+        if (!problem) done = Math.max(done, i + 1);
+      } catch (err) {
+        status.textContent = err.message;
+        status.className = 'pill bad';
+      }
+      refresh();
+    };
+    return { row, btn };
+  });
+  const refresh = () => rows.forEach((r, i) => {
+    r.row.classList.toggle('locked', i > done);
+    r.btn.disabled = i > done;
+    r.btn.title = i > done ? 'Simulate the previous step first' : '';
+  });
+  refresh();
+  box.append(...rows.map((r) => r.row));
+
+  const provider = state.catalog.find((p) => p.id === sc.providerId);
+  return el('details', { class: 'card simulation' },
+    el('summary', {}, el('b', {}, 'Simulate'), el('span', { class: 'muted' }, ' - see the exact request and callback for each step. Nothing is sent to your app.')),
+    sc.cart.length ? cartEditor(sc, state, provider) : null,
+    box);
+}
 
 function cartEditor(sc, state, provider) {
   const rows = el('div', { class: 'cart-rows' });
@@ -211,104 +261,98 @@ function cartEditor(sc, state, provider) {
   const affected = sc.mode ? el('select', {}, state.cart.map((l) => el('option', { value: l.id, ...(l.id === state.target ? { selected: '' } : {}) }, l.id))) : null;
   const apply = () => {
     const cart = [...rows.children].map((r) => ({ id: r.querySelector('select').value, count: Number(r.querySelector('input').value) })).filter((l) => l.count > 0);
-    const target = affected?.value && cart.some((l) => l.id === affected.value) ? affected.value : cart[0]?.id;
-    overrides[sc.id] = { cart, target };
-    openScenario(sc);
+    overrides[sc.id] = { cart, target: affected?.value && cart.some((l) => l.id === affected.value) ? affected.value : cart[0]?.id };
+    renderScenario(sc);
   };
-  return el('div', { class: 'card cart' },
-    el('div', { class: 'cart-head' }, el('b', {}, `Cart · ${provider.id} ${provider.descriptor.short_desc}`),
-      sc.mode ? el('span', { class: 'pill cb' }, `seller mode: ${MODE_LABELS[sc.mode]}`) : null),
+  return el('div', { class: 'cart' },
+    el('div', { class: 'cart-head' }, el('b', {}, `Simulation cart · ${provider.id} ${provider.descriptor.short_desc}`)),
     rows,
     el('div', { class: 'row' },
       el('button', { class: 'ghost', type: 'button', onclick: () => addRow({ id: provider.items[0].id, count: Number(provider.items[0].quantity.minimum.count) }) }, '+ Add item'),
       affected ? el('label', { class: 'inline' }, 'Affected item ', affected) : null,
       el('button', { type: 'button', onclick: apply }, 'Apply'),
-      el('button', { class: 'ghost', type: 'button', onclick: () => { delete overrides[sc.id]; openScenario(sc); } }, 'Default cart')),
-    el('p', { class: 'hint' }, sc.mode
-      ? 'The seller mode acts on the affected item, whatever you put in the cart. Re-open the dropdown after Apply to pick among the new items.'
-      : sc.group === 'Offers' ? 'Offers name their items in the catalogue: the expected amounts assume the default cart.' : 'Change items or quantities, then Apply.'));
-}
-
-async function openScenario(sc) {
-  store.set('scenario', sc.id);
-  for (const b of document.querySelectorAll('.scenario-item')) b.classList.toggle('current', b.dataset.id === sc.id);
-  const state = newState(sc, overrides[sc.id]);
-  state.catalog = await getCatalog();
-  const provider = state.catalog.find((p) => p.id === sc.providerId);
-  const mode = () => ({ name: state.mode, items: state.target ? [state.target] : [] });
-  let done = 0;
-  const rows = sc.steps.map((step, i) => {
-    const out = el('div', { class: 'out step-out' });
-    const status = el('span', { class: 'pill' }, 'pending');
-    const playBtn = el('button', { class: 'play', type: 'button', 'data-needs-target': '' }, '▶');
-    const previewBtn = el('button', { class: 'ghost', type: 'button' }, 'Preview');
-    const row = el('div', { class: 'step' },
-      el('div', { class: 'step-head' }, el('span', { class: 'step-no' }, String(i + 1)), el('b', {}, step.name), el('code', {}, label(step)), status, el('span', { class: 'spacer' }), previewBtn, playBtn),
-      el('p', { class: 'step-expect' }, 'Expected: ', expectText(step, state)),
-      out);
-    const go = async (play) => {
-      busy(playBtn, true);
-      busy(previewBtn, true);
-      status.textContent = play ? 'sending…' : 'previewing…';
-      status.className = 'pill';
-      out.replaceChildren();
-      let ok = false;
-      try {
-        const { request, reply, problem } = await runStep(step, state, { ...env(), send: (a, b) => send(a, b, { play }, mode()), previewSend: (a, b) => send(a, b, { play: false }) });
-        renderReply(out, reply, { request, action: step.action });
-        const delivered = !play || deliveriesOk(reply);
-        ok = !problem && delivered;
-        status.textContent = problem ? `unexpected: ${problem}` : !delivered ? 'buyer app did not ACK' : play ? 'as expected · delivered' : 'as expected';
-        status.className = `pill ${ok ? 'ok' : 'bad'}`;
-        if (!problem) done = Math.max(done, i + 1);
-      } catch (err) {
-        if (err.reply) renderReply(out, err.reply, { request: err.request, action: step.action });
-        status.textContent = err.message;
-        status.className = 'pill bad';
-      }
-      busy(playBtn, false);
-      busy(previewBtn, false);
-      refreshSteps();
-      return ok;
-    };
-    playBtn.onclick = () => go(true);
-    previewBtn.onclick = () => go(false);
-    return { row, playBtn, previewBtn, go };
-  });
-  // A step unlocks once every earlier step has produced its expected response.
-  const refreshSteps = () => rows.forEach((r, i) => {
-    r.row.classList.toggle('locked', i > done);
-    refreshButton(r.playBtn);
-    refreshButton(r.previewBtn);
-  });
-  const runAll = (play) => async (e) => {
-    busy(e.currentTarget, true);
-    for (let i = done; i < rows.length; i++) if (!(await rows[i].go(play)) && play) break;
-    busy(e.currentTarget, false);
-  };
-  const playAll = el('button', { class: 'play', type: 'button', 'data-needs-target': '' }, '▶ Play all');
-  playAll.onclick = runAll(true);
-  const previewAll = el('button', { class: 'ghost', type: 'button' }, 'Preview all');
-  previewAll.onclick = runAll(false);
-  const reset = el('button', { class: 'ghost', type: 'button', onclick: () => openScenario(sc) }, 'Reset');
-  $('#scenarioRun').replaceChildren(
-    el('div', { class: 'run-head' },
-      el('div', {}, el('span', { class: 'pill' }, sc.group), el('h2', {}, sc.title), el('p', { class: 'muted' }, sc.summary)),
-      el('div', { class: 'row' }, reset, previewAll, playAll)),
-    sc.cart.length ? cartEditor(sc, state, provider) : null,
-    ...rows.map((r) => r.row),
-  );
-  refreshSteps();
-  refreshTarget();
+      el('button', { class: 'ghost', type: 'button', onclick: () => { delete overrides[sc.id]; renderScenario(sc); } }, 'Default cart')));
 }
 
 let group;
 for (const sc of SCENARIOS) {
   if (sc.group !== group) $('#scenarioList').append(el('h4', {}, (group = sc.group)));
-  $('#scenarioList').append(el('button', { class: 'scenario-item', type: 'button', 'data-id': sc.id, onclick: () => openScenario(sc) },
-    el('span', {}, sc.title), el('span', { class: 'muted steps-count' }, `${sc.steps.length} step${sc.steps.length > 1 ? 's' : ''}`)));
+  $('#scenarioList').append(el('button', { class: 'scenario-item', type: 'button', 'data-id': sc.id, onclick: () => renderScenario(sc) },
+    el('span', {}, sc.title), sc.mode ? el('span', { class: 'muted steps-count' }, MODE_LABELS[sc.mode]) : null));
 }
-openScenario(SCENARIOS.find((x) => x.id === store.get('scenario', '')) ?? SCENARIOS[0]);
+
+// ---- activity -------------------------------------------------------------------------------
+// Polls what the mock received from this bap_id and what it sent back.
+let seen = '';
+let pollTimer;
+async function pollActivity(force = false) {
+  clearTimeout(pollTimer);
+  if (!bapId()) {
+    $('#activity').replaceChildren(el('p', { class: 'muted' }, 'Enter your bap_id above to see the calls your app makes.'));
+    $('#orders').replaceChildren();
+    $('#activityCount').textContent = '';
+  } else {
+    try {
+      const data = await fetch(`/api/mock/activity?bap_id=${encodeURIComponent(bapId())}`, { cache: 'no-store' }).then((r) => r.json());
+      const key = data.activity.map((a) => a.id).join() + json(data.orders.map((o) => [o.id, o.state, o.fulfillment_state]));
+      if (force || key !== seen) {
+        seen = key;
+        renderActivity(data.activity);
+        renderOrders(data.orders);
+      }
+      $('#activityCount').textContent = data.activity.length ? String(data.activity.length) : '';
+      $('#activityState').textContent = `live · updated ${new Date().toLocaleTimeString()}`;
+    } catch {
+      $('#activityState').textContent = 'could not load activity';
+    }
+  }
+  pollTimer = setTimeout(pollActivity, 3000);
+}
+
+function renderActivity(entries) {
+  if (!entries.length) {
+    return $('#activity').replaceChildren(el('p', { class: 'muted' }, `No calls from ${bapId()} yet. Point your app at ${BPP.uri} and make a call - it shows up here.`));
+  }
+  $('#activity').replaceChildren(...entries.map((a) => {
+    const ok = a.response?.message?.ack?.status === 'ACK';
+    const who = a.kind === 'seller_action' ? `seller: ${a.scenario}` : `/${a.action}`;
+    const meta = [new Date(a.at).toLocaleTimeString(), a.transaction_id && `txn ${String(a.transaction_id).slice(0, 8)}`, a.kind === 'request' && a.scenario].filter(Boolean).join(' · ');
+    const node = callBlock({
+      pill: ok ? 'ACK' : 'NACK', pillClass: ok ? 'ok' : 'bad', name: who, meta, open: false,
+      sections: [[a.kind === 'seller_action' ? 'seller action' : 'request from your app', a.request], ['mock sync response', a.response]],
+      extra: (a.callbacks ?? []).map((c) => deliveryPill(c.delivery) ?? el('span', { class: 'pill' }, 'callback pending')),
+    });
+    node.querySelector('.call-body').append(...callbackBlocks(a.callbacks, false));
+    return node;
+  }));
+}
+
+const PUSH_EVENTS = ['packed', 'out_for_delivery', 'delivered', 'seller_cancel'];
+function renderOrders(orders) {
+  if (!orders.length) return $('#orders').replaceChildren();
+  $('#orders').replaceChildren(el('section', { class: 'card' },
+    el('h2', {}, 'Seller actions'),
+    el('p', { class: 'muted' }, 'Things the seller does on its own on orders your app confirmed. Each sends an unsolicited on_status / on_cancel to your app.'),
+    el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...['order', 'provider', 'total', 'state', 'fulfillment', ''].map((h) => el('th', {}, h)))),
+      el('tbody', {}, orders.map((o) => el('tr', {},
+        el('td', {}, el('code', {}, o.id)),
+        el('td', {}, o.provider),
+        el('td', { class: 'num' }, `₹${o.total}`),
+        el('td', {}, o.state),
+        el('td', {}, o.fulfillment_state),
+        el('td', { class: 'actions' }, PUSH_EVENTS.map((ev) => {
+          const done = ['Cancelled', 'Completed'].includes(o.state);
+          return el('button', { class: ev === 'seller_cancel' ? 'ghost danger' : 'ghost', type: 'button', ...(done ? { disabled: '', title: `Order is ${o.state}` } : {}), onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            await post('/api/mock/push', { order_id: o.id, event: ev }, { 'X-Mock-Deliver': 'wait' });
+            pollActivity(true);
+          } }, PUSH_LABELS[ev]);
+        })),
+      ))),
+    )),
+  ));
+}
 
 // ---- catalogue ------------------------------------------------------------------------------
 const tagList = (tags, code) => (tags.find((t) => t.code === code)?.list ?? []).map((e) => `${e.code} ${e.value === '' ? '(no upper limit)' : e.value}`).join(', ');
@@ -383,4 +427,9 @@ async function loadCatalogue() {
   ));
 }
 
-showTab(['scenarios', 'catalogue', 'retailers'].includes(store.get('tab', '')) ? store.get('tab', '') : 'scenarios');
+showTab(['scenarios', 'activity', 'catalogue', 'retailers'].includes(store.get('tab', '')) ? store.get('tab', '') : 'scenarios');
+
+refreshTarget();
+loadArmed();
+pollActivity();
+renderScenario(SCENARIOS.find((x) => x.id === store.get('scenario', '')) ?? SCENARIOS[0]);

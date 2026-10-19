@@ -1,8 +1,25 @@
 # eB2B Mock Seller NP
 
 A mock ONDC **eB2B (DigiDukaan)** Seller NP (BPP) for buyer-app developers. Point your buyer app's
-`bpp_uri` at it and it answers with protocol-shaped callbacks: search, every pre-order outcome the
-Qwipo pre-order-service handles, every offer type in the contract, and post-order status / cancel.
+`bpp_uri` at it: **your app makes every call** (`/search`, `/select`, `/init`, `/confirm`, `/status`,
+`/cancel`) and the mock answers with protocol-shaped callbacks to the app's `bap_uri`, per the
+scenario you activate for the app's `bap_id`. It covers search, every pre-order outcome the Qwipo
+pre-order-service handles, every offer type in the contract, and post-order status / cancel.
+
+## How to test your buyer app
+
+1. Open the playground (`/`) and enter the `bap_id` your app sends in `context.bap_id`.
+2. Point the app at the `bpp_uri` shown at the top (`<host>/ondc`).
+3. Pick a scenario and press **Activate for my bap_id**. The page lists what to do in the app for
+   each step, and what the mock will answer.
+4. Use the app. The **Activity** tab shows every call it made, the mock's ACK, each callback and
+   whether the app ACKed it.
+5. For post-order, the seller acts on its own: **Seller actions** in the Activity tab (Packed, Out
+   for delivery, Delivered, Seller cancels) send an unsolicited `on_status` / `on_cancel` to the app
+   for orders it confirmed.
+
+**Simulate** (in each scenario) runs the steps in sync mode, showing the exact request the app
+should send and the callback it gets. It sends nothing to the app.
 
 - Domain `ONDC:RETeB2B`, core version `1.2.5`, city `std:080`
 - 3 providers, 20 items, variant groups, timings, `brand_images`, offers
@@ -47,8 +64,8 @@ armed mode or a mode's per-transaction effect may not be seen by the next reques
   `X-ONDC-Search-Response: full | inc | p2p`.
 - **Sync (Postman, curl, CI):** header `X-Mock-Sync: true` or `?sync=1`. The reply is
   `{ response, callbacks: [{ url, delay_ms, headers, body }] }` and nothing is POSTed.
-- **Play (the playground's ▶):** header `X-Mock-Deliver: wait`. The callbacks are POSTed now and
-  returned with the buyer app's reply.
+- **Wait:** header `X-Mock-Deliver: wait`. The callbacks are POSTed now and returned with the buyer
+  app's reply (used for seller actions).
 - Every reply has an `X-Mock-Scenario` header naming the branch the mock took.
 
 Mock-only endpoints (not ONDC):
@@ -56,8 +73,10 @@ Mock-only endpoints (not ONDC):
 - `POST /api/mock/push { order_id, event }`: the seller acts on a confirmed order. `event` is
   `packed | out_for_delivery | delivered` (unsolicited `on_status`) or `seller_cancel`
   (unsolicited `on_cancel`, reason 005).
-- `GET /api/mock/mode?bap_id=…`, `POST /api/mock/mode { bap_id, mode, items? }`: arm a seller mode
-  for a buyer app (below). It lasts 24h; set `normal` to switch it off.
+- `GET /api/mock/mode?bap_id=…`, `POST /api/mock/mode { bap_id, mode, items?, scenario? }`: the
+  seller mode for a buyer app (below). It lasts 24h; set `normal` to switch it off.
+- `GET /api/mock/activity?bap_id=…`: the calls from that buyer app (last 50, with callbacks and the
+  app's answers) and the orders it confirmed. Simulations are not recorded.
 
 ## Seller modes
 
@@ -74,10 +93,10 @@ items the buyer actually ordered: the ones named for the mode, else the first it
 | `init_qty_reduced` | `/init` | Half the ordered qty, no error (the buyer re-selects) |
 | `confirm_rejected` | `/confirm` | `on_confirm` with **30019** |
 
-- **Playground:** each scenario sends its mode as `X-Mock-Mode`, with `X-Mock-Mode-Items` set to
-  the affected item picked in the cart editor.
-- **A real buyer app** (for example Qwipo) can't send those headers. Arm the mode for its `bap_id`
-  (the playground's "Seller mode" control, or `POST /api/mock/mode`), then order anything from the app.
+- **Your buyer app:** activating a scenario arms its mode for the app's `bap_id`
+  (`POST /api/mock/mode`); every call from that `bap_id` then gets it, on whatever items it orders.
+- **Simulation / curl:** send the mode on the request as `X-Mock-Mode`, with `X-Mock-Mode-Items`
+  for the affected items. The header wins over the armed mode.
 - **A mode acts once per transaction and is remembered for it.** The re-select / re-init that
   follows sees the same seller state, so an item stays out of stock and a halved quantity is not
   halved again.
@@ -124,11 +143,10 @@ customer_id, or by phone_number + PAN, and returns credit, POC, customer and sch
 
 ## Scenarios
 
-Each scenario is a flow of steps. In the playground every step has ▶ (send the callback to your
-`bap_uri`) and Preview, and states what it expects; order scenarios have a cart editor and, for a
-seller mode, an affected-item picker. Order scenarios start at `/select` with the retailer already
-identified; the catalogue they need is fetched as a preview and never sent to the buyer app.
-`npm test` runs every scenario, and runs every mode again on other carts.
+Each scenario lists the steps your app performs and what the mock answers to each. Order
+scenarios start at `/select` with the retailer already identified (the app should have the
+catalogue from a search). The simulation has a cart editor and, for a seller mode, an
+affected-item picker. `npm test` runs every scenario, and runs every mode again on other carts.
 
 | Group | Scenario | Seller |
 |---|---|---|
