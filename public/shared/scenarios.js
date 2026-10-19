@@ -17,6 +17,19 @@ const fail = (cond, msg) => (cond ? null : msg);
 const all = (...checks) => checks.find(Boolean) ?? null;
 const noError = (reply) => fail(!cbBody(reply)?.error, `unexpected error ${JSON.stringify(cbBody(reply)?.error)}`);
 const appliedOffers = (reply) => (order(reply)?.offers ?? []).map((o) => o.id);
+const priceIs = (reply, value) => fail(order(reply)?.quote.price.value === value, `quote.price ${order(reply)?.quote.price.value}, expected ${value}`);
+const offerIs = (reply, id, value, auto) => {
+  const l = offerLine(reply, id);
+  if (!l) return `${id} not in the breakup`;
+  return all(fail(l.price.value === value, `${id} at ${l.price.value}, expected ${value}`),
+    fail(!auto || tagVal(l.item.tags, 'offer', 'auto') === auto, `${id} sent with auto ${tagVal(l.item.tags, 'offer', 'auto')}, expected ${auto}`));
+};
+const offersAre = (reply, ids) => fail(appliedOffers(reply).sort().join() === [...ids].sort().join(), `applied [${appliedOffers(reply).join()}], expected [${ids.join()}]`);
+// on_init / on_confirm list only the applied offers.
+const onlyApplied = (reply) => {
+  const listed = breakup(reply).filter((b) => b['@ondc/org/title_type'] === 'offer').map((b) => b['@ondc/org/item_id']).sort().join();
+  return fail(listed === appliedOffers(reply).sort().join(), `breakup lists [${listed}], applied [${appliedOffers(reply).join()}]`);
+};
 // Sum of the breakup must equal quote.price (on_init / on_confirm carry only the applied offers).
 const quoteAddsUp = (reply) => {
   const q = order(reply)?.quote;
@@ -69,17 +82,40 @@ const p2pStep = (name, build, expect, check) => ({
 
 // /select. `lines` defaults to the scenario's cart; it can be a function of state (a re-select built
 // from the seller's reply).
-const selectStep = ({ lines, expect = 'Serviceable quote.', check, reselect = false, buyer } = {}) => ({
+// The seller deactivates / reactivates the scenario's provider: unsolicited incremental on_search.
+const providerStep = (event) => {
+  const label = event === 'provider_disable' ? 'disable' : 'enable';
+  return {
+    // The buyer's catalogue is cached before the seller goes inactive (the full catalogue then leaves it out).
+    name: `seller ${label === 'disable' ? 'goes inactive' : 'is active again'} → on_search`, action: 'push', event, callback: 'on_search', needsCatalog: true,
+    buyer: (s) => `Nothing to do in the app: the seller ${label === 'disable' ? 'deactivates' : 'reactivates'} ${s.providerId} on its own${label === 'disable' ? ' when the flow starts' : ' once the previous step completes'}. The app receives it and ${label === 'disable' ? 'removes the provider from its catalogue' : 'restores the provider'}.`,
+    expect: label === 'disable'
+      ? 'Unsolicited on_search (header inc), new transaction: bpp/providers [{ id, time: { label: "disable", timestamp } }] - soft delete of the provider from the buyer\'s cache.'
+      : 'Unsolicited on_search (header inc), new transaction: the whole provider record (locations, items, offers, tags) with time.label "enable" - the buyer restores it.',
+    build: (env, s) => R.providerPush({ bap: env.bap, providerId: s.providerId, event }),
+    ready: () => true,
+    check: (reply, s) => {
+      const c = reply.callbacks.at(-1);
+      const p = c?.body?.message?.catalog?.['bpp/providers']?.[0];
+      return all(fail(c?.headers?.['X-ONDC-Search-Response'] === 'inc', 'expected header inc'),
+        fail(p?.id === s.providerId && p?.time?.label === label, `expected ${s.providerId} with time.label ${label}, got ${p?.id} ${p?.time?.label}`),
+        fail(label === 'disable' ? !p?.items : p?.items?.length > 0, label === 'disable' ? 'disable should carry only id + time' : 'enable should carry the full provider'));
+    },
+  };
+};
+
+// `offers`: offer ids the buyer sends on /select.
+const selectStep = ({ lines, offers, expect = 'Serviceable quote.', check, reselect = false, buyer } = {}) => ({
   name: reselect ? 're-select → on_select' : 'select → on_select', action: 'select', expect, needsCatalog: true,
   buyer: buyer ?? ((s) => (reselect
     ? (Array.isArray(lines) ? `Change the cart to ${cartText(s, lines)}: the app sends /select again.` : 'Accept the seller\'s changes to the cart: the app sends /select again.')
     : s.anyItems
       ? `Add any items to the cart${s.mode !== 'normal' ? ` (the seller mode hits ${s.modeItems?.length ? s.modeItems.join(', ') : 'the first item in the cart'})` : ''} and open it: the app sends /select.`
-      : `Add ${cartText(s, lines ?? s.cart)} from ${s.providerId} and open the cart: the app sends /select.`)),
+      : `Add ${cartText(s, lines ?? s.cart)} from ${s.providerId} and open the cart: the app sends /select${offers ? ` with the offers ${offers.join(' + ')} selected` : ''}.`)),
   build: (env, s) => {
     const req = R.select({
       ...env, catalogProvider: providerOf(s), retailer: s.retailer,
-      lines: typeof lines === 'function' ? lines(s) : lines ?? s.cart,
+      lines: typeof lines === 'function' ? lines(s) : lines ?? s.cart, offers,
       ...(reselect ? { transactionId: s.selectRequest.context.transaction_id } : {}),
     });
     s.selectRequest = req;
@@ -119,11 +155,12 @@ const statusStep = () => ({
   check: (reply) => fail(order(reply)?.state === 'Accepted', `state ${order(reply)?.state}`),
 });
 
-const PUSH_LABELS = { packed: 'Packed', out_for_delivery: 'Out for delivery', delivered: 'Delivered', seller_cancel: 'Seller cancels' };
+const PUSH_LABELS = { packed: 'Packed', out_for_delivery: 'Out for delivery', delivered: 'Delivered', seller_cancel: 'Seller cancels', provider_disable: 'Deactivate seller', provider_enable: 'Activate seller' };
 const pushStep = (event, name, expect, [orderState, fulfillmentState]) => ({
   name, action: 'push', expect, event, callback: event === 'seller_cancel' ? 'on_cancel' : 'on_status',
   buyer: () => `Nothing to do in the app: the seller sends this on its own (${PUSH_LABELS[event]}) once the previous step completes. The app receives it.`,
   build: (env, s) => R.sellerPush({ onConfirm: s.onConfirm, event }),
+  ready: (s) => Boolean(s.onConfirm),
   check: (reply) => fail(order(reply)?.state === orderState && order(reply)?.fulfillments[0].state.descriptor.code === fulfillmentState,
     `expected ${orderState} / ${fulfillmentState}, got ${order(reply)?.state} / ${order(reply)?.fulfillments?.[0]?.state?.descriptor?.code}`),
 });
@@ -323,8 +360,8 @@ export const SCENARIOS = [
     cart: [{ id: 'I6', count: 10 }],
     summary: 'freebie1: buy 10 Dark Fantasy, get 1 Bingo Mad Angles free.',
     steps: [
-      selectStep({ expect: 'freebie1 line: price 0.00, item_quantity 1, offer tag item_id I7, item_count 1.',
-        check: (r) => fail(tagVal(offerLine(r, 'freebie1')?.item.tags, 'offer', 'item_id') === 'I7', 'expected freebie1 with I7') }),
+      selectStep({ expect: 'freebie1 applied at -380.00 (1 × I7 at its item_value 380.00), item_quantity 1, offer tag item_id I7, item_count 1: quote.price 3220.00.',
+        check: (r) => all(fail(tagVal(offerLine(r, 'freebie1')?.item.tags, 'offer', 'item_id') === 'I7', 'expected freebie1 with I7'), offerIs(r, 'freebie1', '-380.00', 'yes'), priceIs(r, '3220.00')) }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('freebie1'), 'freebie1 not applied')) }),
       confirmStep(),
     ],
@@ -332,10 +369,10 @@ export const SCENARIOS = [
   {
     id: 'offer-buyxgety', group: 'Offers', title: 'Buy X get Y', providerId: 'P3', retailer: WALK_IN_RETAILER,
     cart: [{ id: 'I16', count: 6 }],
-    summary: 'buy2get1: every 2 cases of Frooti 200ml get 1 more free.',
+    summary: 'buy2get1: buy 2+ cases of Frooti 200ml, get 1 free. Worth the free item\'s unit price × the benefit item_count (not per multiple of 2).',
     steps: [
-      selectStep({ expect: '6 cases: buy2get1 with 3 free (item_id I16, item_count 3, item_value 0.00).',
-        check: (r) => fail(tagVal(offerLine(r, 'buy2get1')?.item.tags, 'offer', 'item_count') === '3', 'expected 3 free') }),
+      selectStep({ expect: '6 cases: buy2get1 applied at -300.00 (1 × I16 at its cart price 300.00), item_count 1: quote.price 1500.00.',
+        check: (r) => all(fail(tagVal(offerLine(r, 'buy2get1')?.item.tags, 'offer', 'item_count') === '1', 'expected 1 free'), offerIs(r, 'buy2get1', '-300.00', 'yes'), priceIs(r, '1500.00')) }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('buy2get1'), 'buy2get1 not applied')) }),
       confirmStep(),
     ],
@@ -351,14 +388,140 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'offer-stacking', group: 'Offers', title: 'Stacking - exclusive vs additive', providerId: 'P1', retailer: SHARMA,
+    id: 'offer-stacking', group: 'Offers', title: 'Init - exclusive blocks additive', providerId: 'P1', retailer: SHARMA,
     cart: [{ id: 'I2', count: 20 }, { id: 'I6', count: 10 }],
-    summary: 'The cart qualifies for slab2 and freebie1 (both auto, non-additive) and discp10 (opt-in, additive). Only one non-additive offer may apply.',
+    summary: 'The cart qualifies for slab2 and freebie1 (auto, exclusive) and discp10 (opt-in, additive). An exclusive offer blocks every other one, additive ones included.',
     steps: [
-      selectStep({ expect: 'All three listed. Applied: slab2 only (auto; the first non-additive) - quote.price 8010.00.',
-        check: (r) => all(fail(['slab2', 'freebie1', 'discp10'].every((id) => offerLine(r, id)), 'expected slab2, freebie1 and discp10 listed'), fail(order(r).quote.price.value === '8010.00', `quote.price ${order(r).quote.price.value}`)) }),
-      initStep({ offers: ['freebie1', 'discp10'], expect: 'Buyer selects freebie1 + discp10: both applied, slab2 dropped - quote.price 8300.00.',
-        check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).join() === 'discp10,freebie1', `applied ${appliedOffers(r).join()}`)) }),
+      selectStep({ expect: 'All three listed. Applied: slab2 only (the best auto exclusive, -490.00); freebie1 sent as auto = no: quote.price 8010.00.',
+        check: (r) => all(fail(['slab2', 'freebie1', 'discp10'].every((id) => offerLine(r, id)), 'expected slab2, freebie1 and discp10 listed'), offerIs(r, 'freebie1', '-380.00', 'no'), priceIs(r, '8010.00')) }),
+      initStep({ offers: ['freebie1', 'discp10'], expect: 'Buyer sends freebie1 + discp10: freebie1 is exclusive, so only freebie1 applies (discp10 blocked, slab2 not sent): quote.price 8120.00.',
+        check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['freebie1']), priceIs(r, '8120.00')) }),
+      confirmStep(),
+    ],
+  },
+  // The on_select scenarios of the retail-seller-service offers flow (OFFERS-FLOW.md, 1-9).
+  {
+    id: 'offer-auto-priority', group: 'Offers', title: 'Select 1 - no ids: auto additive beats auto exclusive', providerId: 'P2', retailer: LAKSHMI,
+    cart: [{ id: 'I10', count: 5 }, { id: 'I12', count: 10 }],
+    summary: 'flat150 (auto, additive) and slabw1 (auto, exclusive) both qualify; the buyer sends no offer ids. Auto additive offers take priority.',
+    steps: [
+      selectStep({ expect: 'flat150 applied (-150.00, auto yes); slabw1 listed at -99.00 but sent as auto = no: quote.price 4925.00.',
+        check: (r) => all(noError(r), offerIs(r, 'flat150', '-150.00', 'yes'), offerIs(r, 'slabw1', '-99.00', 'no'), priceIs(r, '4925.00')) }),
+      initStep({ expect: 'The buyer carries flat150 forward: only flat150 applied, quote.price 4925.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['flat150']), priceIs(r, '4925.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-optin-additive', group: 'Offers', title: 'Select 2 - buyer adds an opt-in additive offer', providerId: 'P2', retailer: LAKSHMI,
+    cart: [{ id: 'I10', count: 5 }, { id: 'I12', count: 10 }, { id: 'I15', count: 2 }],
+    summary: 'The buyer sends disc5 (opt-in, additive) on /select: it stacks with flat150 (auto, additive). slabw1 (auto, exclusive) loses.',
+    steps: [
+      selectStep({ offers: ['disc5'], expect: 'flat150 (-150.00) + disc5 (-52.00) applied; slabw1 sent as auto = no: quote.price 5913.00.',
+        check: (r) => all(noError(r), offerIs(r, 'flat150', '-150.00', 'yes'), offerIs(r, 'disc5', '-52.00'), offerIs(r, 'slabw1', '-99.00', 'no'), priceIs(r, '5913.00')) }),
+      initStep({ expect: 'Buyer sends flat150 + disc5: both applied, quote.price 5913.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['flat150', 'disc5']), priceIs(r, '5913.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-optin-exclusive', group: 'Offers', title: 'Select 3 - buyer picks an exclusive offer', providerId: 'P2', retailer: LAKSHMI,
+    cart: [{ id: 'I10', count: 6 }, { id: 'I12', count: 10 }],
+    summary: 'The buyer sends excl300 (opt-in, exclusive): it blocks every other offer, the auto ones included.',
+    steps: [
+      selectStep({ offers: ['excl300'], expect: 'Only excl300 applied (-300.00); flat150 (-150.00) and slabw1 (-118.80) listed with auto = no: quote.price 5270.00.',
+        check: (r) => all(noError(r), offerIs(r, 'excl300', '-300.00'), offerIs(r, 'flat150', '-150.00', 'no'), offerIs(r, 'slabw1', '-118.80', 'no'), priceIs(r, '5270.00')) }),
+      initStep({ expect: 'Buyer sends excl300: applied alone, quote.price 5270.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['excl300']), priceIs(r, '5270.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-mixed-selection', group: 'Offers', title: 'Select 4 - several exclusive + additive ids', providerId: 'P2', retailer: LAKSHMI,
+    cart: [{ id: 'I10', count: 6 }, { id: 'I12', count: 10 }, { id: 'I15', count: 2 }],
+    summary: 'The buyer sends slabw1 + excl300 (both exclusive) + disc5 (additive). The exclusive with the highest discount wins and blocks the rest.',
+    steps: [
+      selectStep({ offers: ['slabw1', 'excl300', 'disc5'], expect: 'Only excl300 applied (-300.00 beats slabw1 -118.80); disc5 and flat150 blocked: quote.price 6310.00.',
+        check: (r) => all(noError(r), offerIs(r, 'excl300', '-300.00'), offerIs(r, 'slabw1', '-118.80', 'no'), offerIs(r, 'flat150', '-150.00', 'no'), priceIs(r, '6310.00')) }),
+      initStep({ offers: ['excl300', 'disc5'], expect: 'Buyer sends excl300 + disc5 at init: excl300 alone, quote.price 6310.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['excl300']), priceIs(r, '6310.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-optin-stack', group: 'Offers', title: 'Select 5 - only opt-in additive offers', providerId: 'P1', retailer: SHARMA,
+    cart: [{ id: 'I1', count: 20 }, { id: 'I8', count: 2 }],
+    summary: 'No auto offer qualifies. The buyer sends discp10 + flat50 (both opt-in, additive): they stack.',
+    steps: [
+      selectStep({ offers: ['discp10', 'flat50'], expect: 'discp10 (-104.00) + flat50 (-50.00) applied: quote.price 3086.00.',
+        check: (r) => all(noError(r), offerIs(r, 'discp10', '-104.00'), offerIs(r, 'flat50', '-50.00'), priceIs(r, '3086.00')) }),
+      initStep({ expect: 'Buyer sends discp10 + flat50: both applied.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['discp10', 'flat50']), priceIs(r, '3086.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-only-auto-exclusive', group: 'Offers', title: 'Select 6 - only an auto exclusive offer', providerId: 'P1', retailer: SHARMA,
+    cart: [{ id: 'I2', count: 10 }],
+    summary: 'slab1 (auto, exclusive) is the only auto offer; discp10 (opt-in) also qualifies. No ids sent: slab1 is auto-applied.',
+    steps: [
+      selectStep({ expect: 'slab1 applied (-122.50, auto yes); discp10 listed at -200.00 (auto no): quote.price 2327.50.',
+        check: (r) => all(noError(r), offerIs(r, 'slab1', '-122.50', 'yes'), offerIs(r, 'discp10', '-200.00', 'no'), priceIs(r, '2327.50')) }),
+      initStep({ expect: 'Buyer carries slab1 forward: quote.price 2327.50.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['slab1']), priceIs(r, '2327.50')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-buyer-overrides-auto', group: 'Offers', title: 'Select 7 - buyer exclusive overrides a bigger auto exclusive', providerId: 'P2', retailer: LAKSHMI,
+    cart: [{ id: 'I10', count: 13 }],
+    summary: '52 kg of Surf Excel: slabw2 (auto, exclusive, -514.80) and excl300 (opt-in, exclusive, -300.00). The buyer sends excl300: its choice wins although slabw2 is bigger.',
+    steps: [
+      selectStep({ offers: ['excl300'], expect: 'excl300 applied (-300.00); slabw2 listed at -514.80 with auto = no: quote.price 6135.00.',
+        check: (r) => all(noError(r), offerIs(r, 'excl300', '-300.00'), offerIs(r, 'slabw2', '-514.80', 'no'), priceIs(r, '6135.00')) }),
+      initStep({ expect: 'Buyer sends excl300: quote.price 6135.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['excl300']), priceIs(r, '6135.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-optin-over-auto-exclusive', group: 'Offers', title: 'Select 8 - opt-in additive over an auto exclusive', providerId: 'P1', retailer: SHARMA,
+    cart: [{ id: 'I2', count: 10 }],
+    summary: 'The only auto offer is slab1 (exclusive). The buyer sends discp10 (opt-in, additive): its choice wins, slab1 is downgraded.',
+    steps: [
+      selectStep({ offers: ['discp10'], expect: 'discp10 applied (-200.00, capped); slab1 listed at -122.50 with auto = no: quote.price 2250.00.',
+        check: (r) => all(noError(r), offerIs(r, 'discp10', '-200.00'), offerIs(r, 'slab1', '-122.50', 'no'), priceIs(r, '2250.00')) }),
+      initStep({ expect: 'Buyer sends discp10: quote.price 2250.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['discp10']), priceIs(r, '2250.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-best-auto-exclusive', group: 'Offers', title: 'Select 9 - several auto exclusive: best wins', providerId: 'P1', retailer: SHARMA,
+    cart: [{ id: 'I2', count: 20 }, { id: 'I6', count: 10 }, { id: 'I4', count: 5 }, { id: 'I5', count: 3 }],
+    summary: 'slab2 (-490.00), freebie1 (-380.00) and combo1 (-200.00) are all auto + exclusive; no ids sent. The highest discount applies.',
+    steps: [
+      selectStep({ expect: 'slab2 applied (auto yes); freebie1 and combo1 listed with auto = no: quote.price 12480.00.',
+        check: (r) => all(noError(r), offerIs(r, 'slab2', '-490.00', 'yes'), offerIs(r, 'freebie1', '-380.00', 'no'), offerIs(r, 'combo1', '-200.00', 'no'), priceIs(r, '12480.00')) }),
+      initStep({ expect: 'Buyer carries slab2 forward: quote.price 12480.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, ['slab2']), priceIs(r, '12480.00')) }),
+      confirmStep(),
+    ],
+  },
+  // Edge cases of the offers flow.
+  {
+    id: 'offer-invalid-ids', group: 'Offers', title: 'Edge - unknown, expired and duplicate ids', providerId: 'P1', retailer: SHARMA,
+    cart: [{ id: 'I1', count: 20 }],
+    summary: 'The buyer sends discp10 twice, expired1 (published but expired) and an unknown id. Invalid ids are skipped silently; discp10 applies once.',
+    steps: [
+      selectStep({ offers: ['discp10', 'discp10', 'expired1', 'NOPE'], expect: 'No error. discp10 applied once (-104.00); expired1 not listed: quote.price 936.00.',
+        check: (r) => all(noError(r), offerIs(r, 'discp10', '-104.00'), fail(!offerLine(r, 'expired1'), 'expired1 listed'), priceIs(r, '936.00')) }),
+      initStep({ offers: ['discp10', 'discp10', 'expired1', 'NOPE'], expect: 'No error. Only discp10 applied: quote.price 936.00.',
+        check: (r) => all(noError(r), quoteAddsUp(r), offersAre(r, ['discp10']), priceIs(r, '936.00')) }),
+      confirmStep(),
+    ],
+  },
+  {
+    id: 'offer-cart-changed', group: 'Offers', title: 'Edge - cart changes after select', providerId: 'P1', retailer: SHARMA,
+    cart: [{ id: 'I2', count: 20 }],
+    summary: 'on_select applies slab2 for 20 units; the buyer drops to 12 units but still sends slab2 at init. Offers are re-evaluated on the new cart.',
+    steps: [
+      selectStep({ expect: 'slab2 applied (-490.00): quote.price 4410.00.', check: (r) => all(offerIs(r, 'slab2', '-490.00', 'yes'), priceIs(r, '4410.00')) }),
+      selectStep({ reselect: true, lines: [{ id: 'I2', count: 12 }], expect: '12 units: slab1 applied (-147.00), slab2 gone: quote.price 2793.00.',
+        check: (r) => all(offerIs(r, 'slab1', '-147.00', 'yes'), fail(!offerLine(r, 'slab2'), 'slab2 still listed'), priceIs(r, '2793.00')) }),
+      initStep({ offers: ['slab2'], expect: 'Buyer sends the stale slab2: dropped, no offer applied: quote.price 2940.00.',
+        check: (r) => all(noError(r), quoteAddsUp(r), offersAre(r, []), priceIs(r, '2940.00')) }),
       confirmStep(),
     ],
   },
@@ -382,6 +545,21 @@ export const SCENARIOS = [
     summary: 'Ravi Provision Store registers with P1.',
     steps: [p2pStep('search (P2P, new retailer) → on_search', (env) => R.searchP2PNewRetailer({ ...env, providerId: 'P1', retailer: NEW_RETAILER }),
       'First callback: creation pending (POC only). Second, ~5s later and unsolicited: credit + customer.id CUST-NEW-122233.')],
+  },
+
+  // Seller (provider) inactive / active again
+  {
+    id: 'seller-inactive', group: 'Pre-order', title: 'Seller inactive, then active again', providerId: 'P1', retailer: SHARMA, cart: [{ id: 'I1', count: 20 }],
+    summary: 'The seller deactivates P1 (incremental on_search, time.label disable): orders on it get 30021 Merchant inactive. It then reactivates P1 (time.label enable, whole provider) and the order goes through.',
+    steps: [
+      providerStep('provider_disable'),
+      selectStep({ buyer: () => 'Try to order from P1 anyway (e.g. from a cart built before): the app sends /select.', expect: 'on_select with error 30021 (Merchant inactive) - the provider takes no orders.',
+        check: (r) => fail(errorCode(r) === '30021', `expected 30021, got ${errorCode(r) ?? 'no error'}`) }),
+      providerStep('provider_enable'),
+      selectStep({ reselect: true, buyer: () => 'Order from P1 again: the app sends /select.', expect: 'Serviceable quote, no error.', check: noError }),
+      initStep(),
+      confirmStep(),
+    ],
   },
 
   // Post-order

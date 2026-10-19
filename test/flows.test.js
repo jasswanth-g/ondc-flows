@@ -5,10 +5,11 @@ import crypto from 'node:crypto';
 import { handle, handlePush } from '../lib/handler.js';
 import { deliver } from '../lib/transport.js';
 import { authorizationHeader, signingConfig } from '../lib/signing.js';
-import { offerLines } from '../lib/offers.js';
+import { offerLines, OFFERS } from '../lib/offers.js';
 import { PROVIDERS } from '../lib/data.js';
 import { SCENARIOS, runScenario, trackLive } from '../public/shared/scenarios.js';
 import * as R from '../public/shared/requests.js';
+import { RETAILERS } from '../public/shared/retailers.js';
 
 const cfg = {
   baseUrl: 'https://mock.test',
@@ -85,26 +86,75 @@ test('full catalogue: offers published, no retailer_info_required, pan-India ser
   }
 });
 
-test('offers: /select applies only auto offers; /init applies exactly the valid buyer selection', () => {
+test('offers: priority, exclusive and buyer-override rules (OFFERS-FLOW.md)', () => {
   const p1 = PROVIDERS[0];
   const line = (id, count) => ({ item: p1.items.find((i) => i.id === id), count, unitPrice: Number(p1.items.find((i) => i.id === id).price) });
   const cart = [line('I2', 20), line('I6', 10)];
   const ids = (ls) => ls.map((l) => l['@ondc/org/item_id']);
-  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'select' }).eligible), ['discp10', 'slab2', 'freebie1']);
-  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'select' }).applied), ['slab2'], 'opt-in discp10 not applied at select');
-  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['freebie1', 'discp10'] }).applied), ['discp10', 'freebie1']);
-  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: [] }).applied), [], 'nothing selected, nothing applied');
-  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['slab1', 'combo1', 'discp10'] }).applied), ['discp10'], 'ineligible offers dropped');
-  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['slab2', 'freebie1'] }).applied), ['slab2'], 'two non-additive offers never stack');
+  const auto = (ls, id) => ls.find((l) => l['@ondc/org/item_id'] === id).item.tags[1].list.find((e) => e.code === 'auto').value;
+  const sel = offerLines('P1', cart, { stage: 'select' });
+  assert.deepEqual(ids(sel.eligible), ['discp10', 'slab2', 'freebie1'], 'expired1 never listed');
+  assert.deepEqual(ids(sel.applied), ['slab2'], 'best auto exclusive (-490 beats freebie1 -380)');
+  assert.equal(auto(sel.eligible, 'freebie1'), 'no', 'a losing auto offer is downgraded');
+  assert.equal(auto(sel.eligible, 'slab2'), 'yes');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'select', selectedIds: ['discp10'] }).applied), ['discp10'], 'buyer selection beats auto exclusive');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'select', selectedIds: ['freebie1', 'discp10'] }).applied), ['freebie1'], 'selected exclusive blocks selected additive');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['freebie1', 'slab2', 'discp10'] }).applied), ['slab2'], 'highest selected exclusive wins');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: [] }).applied), [], 'init: auto offers are not auto-applied');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['slab1', 'combo1', 'expired1', 'x', 'discp10', 'discp10'] }).applied), ['discp10'], 'ineligible, expired, unknown, duplicate ids skipped');
 });
 
-test('/select ignores offers the buyer sends; /init echoes the applied selection', async () => {
+test('offers: freebie without a price is excluded; offers never take the total below 0.00', async () => {
+  const p1 = PROVIDERS[0];
+  const line = (id, count) => ({ item: p1.items.find((i) => i.id === id), count, unitPrice: Number(p1.items.find((i) => i.id === id).price) });
+  const freebie = OFFERS.P1.find((o) => o.id === 'freebie1');
+  const saved = freebie.benefit.item_value;
+  delete freebie.benefit.item_value;
+  try {
+    assert.ok(!offerLines('P1', [line('I6', 10)], { stage: 'select' }).eligible.length, 'free item not in cart and no item_value');
+    assert.equal(offerLines('P1', [line('I6', 10), line('I7', 5)], { stage: 'select' }).applied[0].price.value, '-380.00', 'priced from the cart');
+  } finally {
+    freebie.benefit.item_value = saved;
+  }
+  const big = { id: 'big', type: 'discount', title: 'big', location_ids: ['L1'], item_ids: ['I1'], qualifier: {}, benefit: { value_type: 'amount', value: '-5000.00' }, additive: 'yes', auto: 'yes' };
+  OFFERS.P1.push(big);
+  try {
+    const r = await send('select', R.select({ ...env, catalogProvider: { id: 'P1', items: [{ id: 'I1', location_id: 'L1', quantity: { minimum: { count: '20' } } }] }, retailer: RETAILERS[0], lines: [{ id: 'I1', count: 20 }] }));
+    const q = r.callbacks.at(-1).body.message.order.quote;
+    assert.equal(q.price.value, '0.00');
+    assert.equal(q.breakup.find((b) => b['@ondc/org/item_id'] === 'big').price.value, '-1040.00', 'a flat amount is capped at the matching value');
+  } finally {
+    OFFERS.P1.pop();
+  }
+});
+
+test('/select honours the buyer\'s offer ids; /init and /confirm list only the applied ones', async () => {
   const s = SCENARIOS.find((x) => x.id === 'offer-discount');
   const state = await runScenario(s, { ...env, send });
   const sel = await send('select', R.select({ ...env, catalogProvider: state.catalog[0], retailer: state.retailer, lines: [{ id: 'I1', count: 20 }], offers: ['discp10'] }));
-  assert.equal(sel.callbacks[0].body.message.order.quote.price.value, '1040.00', 'opt-in offer not applied at select');
+  assert.equal(sel.callbacks[0].body.message.order.quote.price.value, '936.00', 'selected opt-in offer applied at select');
   assert.deepEqual(state.onInit.message.order.offers, [{ id: 'discp10' }]);
   assert.deepEqual(state.onConfirm.message.order.offers, [{ id: 'discp10' }]);
+});
+
+test('seller inactive: disable drops the provider from the catalogue and blocks orders; enable restores it', async () => {
+  const bap = { id: 'inactive.test', uri: 'https://inactive.test/bap' };
+  const off = await send('push', R.providerPush({ bap, providerId: 'P2', event: 'provider_disable' }));
+  assert.equal(off.callbacks[0].headers['X-ONDC-Search-Response'], 'inc');
+  assert.deepEqual(Object.keys(off.callbacks[0].body.message.catalog['bpp/providers'][0]), ['id', 'time']);
+  assert.equal(off.callbacks[0].body.context.bap_uri, bap.uri);
+  const providers = async () => (await send('search', R.searchBroadcast({ bap }))).callbacks[0].body.message.catalog['bpp/providers'].map((p) => p.id);
+  assert.deepEqual(await providers(), ['P1', 'P3'], 'disabled provider left out of the full catalogue');
+  const catalog = (await send('search', R.searchBroadcast({ bap: R.BAP }))).callbacks[0].body.message.catalog['bpp/providers'];
+  assert.equal(catalog.length, 3, 'other buyer apps still see P2');
+  const sel = await send('select', R.select({ bap, catalogProvider: catalog[1], retailer: RETAILERS[1], lines: [{ id: 'I9', count: 20 }] }));
+  assert.equal(sel.callbacks[0].body.error.code, '30021');
+  const on = await send('push', { event: 'provider_enable', provider_id: 'P2', bap_uri: bap.uri, bap_id: bap.id });
+  const p = on.callbacks[0].body.message.catalog['bpp/providers'][0];
+  assert.equal(p.time.label, 'enable');
+  assert.ok(p.items.length && p.locations.length, 'enable carries the whole provider');
+  assert.deepEqual(await providers(), ['P1', 'P2', 'P3']);
+  assert.equal((await send('push', { event: 'provider_disable', provider_id: 'P2', app: 'never-called.test' })).response.message.ack.status, 'NACK', 'unknown app');
 });
 
 // The mode acts on whatever items are in the cart - here other carts and other affected items.

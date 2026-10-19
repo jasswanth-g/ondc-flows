@@ -131,7 +131,7 @@ function customerBlock(retailer) {
 const offerRefs = (offers) => (offers?.length ? { offers: offers.map((id) => ({ id })) } : {});
 
 // /select from a cached catalogue provider. `lines` is [{ id, count }]; count defaults to the item MOQ.
-// `offers` are opt-in offer ids the buyer chose. `transactionId` keeps a re-select on the same transaction.
+// `offers` are offer ids the buyer chose (they win over auto offers). `transactionId` keeps a re-select on the same transaction.
 export function select({ catalogProvider, lines, retailer, offers, transactionId, ...opts }) {
   const items = lines.map(({ id, count }) => {
     const item = catalogProvider.items.find((i) => i.id === id);
@@ -161,19 +161,18 @@ export const linesFromQuote = (quote) =>
     .filter((b) => b['@ondc/org/title_type'] === 'item' && b['@ondc/org/item_quantity'].count > 0)
     .map((b) => ({ id: b['@ondc/org/item_id'], count: b['@ondc/org/item_quantity'].count }));
 
-// The offers on_select applied (auto = yes): every auto + additive offer plus the first auto
-// non-additive one, read from the offer lines of the quote. A buyer's default selection for /init.
-export function autoOffers(onSelect) {
-  let exclusiveTaken = false;
-  return onSelect.message.order.quote.breakup
+// The offers on_select applied, read from its offer lines: an applied auto offer keeps auto = yes
+// (a losing one is sent as auto = no). Of the ids the buyer sent on /select, the best exclusive one
+// wins alone, else they stack with the auto ones. A buyer's default selection for /init, which
+// applies only the ids it is sent.
+export function appliedOnSelect(onSelect, selectedIds = []) {
+  const lines = onSelect.message.order.quote.breakup
     .filter((b) => b['@ondc/org/title_type'] === 'offer')
-    .filter((b) => {
-      const tag = Object.fromEntries((b.item.tags.find((t) => t.code === 'offer')?.list ?? []).map((e) => [e.code, e.value]));
-      if (tag.auto !== 'yes') return false;
-      if (tag.additive === 'yes') return true;
-      return exclusiveTaken ? false : (exclusiveTaken = true);
-    })
-    .map((b) => b['@ondc/org/item_id']);
+    .map((b) => ({ id: b['@ondc/org/item_id'], value: Number(b.price.value), ...Object.fromEntries((b.item.tags.find((t) => t.code === 'offer')?.list ?? []).map((e) => [e.code, e.value])) }));
+  const selected = lines.filter((l) => selectedIds.includes(l.id));
+  const exclusive = selected.filter((l) => l.additive === 'no').sort((x, y) => x.value - y.value);
+  if (exclusive.length) return [exclusive[0].id];
+  return [...new Set([...lines.filter((l) => l.auto === 'yes').map((l) => l.id), ...selected.map((l) => l.id)])];
 }
 
 // /init from /select + /on_select. Billing timestamps are fixed here and must be echoed unchanged.
@@ -192,7 +191,7 @@ export function init({ selectRequest, onSelect, retailer, paymentType = 'ON-FULF
       order: {
         provider: { id: os.provider.id, descriptor: os.provider.descriptor, locations: os.provider.locations },
         items: sel.items.map((i) => ({ id: i.id, fulfillment_id: fulfillment.id, quantity: i.quantity })),
-        ...offerRefs(offers ?? autoOffers(onSelect)),
+        ...offerRefs(offers ?? appliedOnSelect(onSelect, (selectRequest.message.order.offers ?? []).map((o) => o.id))),
         billing: {
           name: retailer.shop_name,
           address: retailer.address,
@@ -277,3 +276,6 @@ export const cancel = ({ onConfirm, reasonId = '053', ...opts }) => ({
 
 // Mock-only: tells the seller to act on the order (not an ONDC request).
 export const sellerPush = ({ onConfirm, event }) => ({ order_id: onConfirm.message.order.id, event });
+// The seller deactivates (provider_disable) or reactivates (provider_enable) a provider for a buyer
+// app: an unsolicited incremental on_search to that app.
+export const providerPush = ({ bap, providerId, event }) => ({ event, provider_id: providerId, bap_id: bap.id, bap_uri: bap.uri });

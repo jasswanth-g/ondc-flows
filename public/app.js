@@ -43,6 +43,9 @@ const bapIdInput = $('#bapId');
 bapIdInput.value = store.get('bapId', '');
 // The buyer app is identified by its bap_uri or bap_id; the mock matches calls by either.
 const bapId = () => bapIdInput.value.trim().replace(/\/+$/, '');
+// Who a seller push goes to: the bap_uri or the bap_id entered (the mock fills in the other half
+// from the apps that called it).
+const pushBap = () => (/^https?:\/\//.test(bapId()) ? { uri: bapId() } : { id: bapId() });
 
 const MODE_LABELS = {
   normal: 'Normal', item_inactive: 'Item inactive', out_of_stock: 'Out of stock', partial_quantity: 'Partial quantity',
@@ -339,10 +342,12 @@ function track(activity) {
   const results = trackLive(sc, entries, { catalog: tracked.catalog ?? [], modeItems: armed.items ?? [] });
   tracked = { ...tracked, results };
   const next = results.findIndex((r) => r.phase === 'waiting');
-  const prevDone = next > 0 && results.slice(0, next).every((r) => r.phase === 'completed');
-  if (next !== -1 && sc.steps[next].action === 'push' && prevDone && results.state.onConfirm && !fired.has(next)) {
+  const prevDone = next >= 0 && results.slice(0, next).every((r) => r.phase === 'completed');
+  const step = sc.steps[next];
+  if (next !== -1 && step.action === 'push' && prevDone && step.ready(results.state) && !fired.has(next)) {
     fired.add(next);
-    setTimeout(() => post('/api/mock/push', R.sellerPush({ onConfirm: results.state.onConfirm, event: sc.steps[next].event }), { 'X-Mock-Deliver': 'wait' }).then(() => poll(true)), 1200);
+    const body = step.build({ bap: pushBap() }, results.state);
+    setTimeout(() => post('/api/mock/push', body, { 'X-Mock-Deliver': 'wait' }).then(() => poll(true)), 1200);
   }
   const done = next === -1 && results.every((r) => r.phase !== 'running');
   $('#liveState').textContent = done ? (results.some((r) => r.problem) ? `${sc.title}: completed with unexpected answers` : `${sc.title}: completed`) : `${sc.title}: running · live`;
@@ -506,6 +511,7 @@ async function loadCatalogue() {
         el('h3', {}, `${p.id} · ${p.descriptor.short_desc} × ${p.descriptor.name}`),
         el('span', { class: 'muted' }, `${p.descriptor.code} · locations ${p.locations.map((l) => `${l.id} ${l.address.locality}`).join(', ')} · min order ₹${minOrder}`),
         el('span', { class: 'pill' }, `serviceability: ${[...new Set(svc)].join(', ')} (pan-India)`),
+        sellerSwitch(p.id),
       ),
       el('div', { class: 'table-wrap' }, el('table', {},
         el('thead', {}, el('tr', {}, ...['', 'id', 'name', 'variant', 'category', 'location', 'price', 'MRP', 'MOQ – max'].map((h) => el('th', {}, h)))),
@@ -514,6 +520,27 @@ async function loadCatalogue() {
       offersTable(p),
     ));
   }
+}
+
+// The seller deactivates / reactivates a provider for the app entered above, by hand: an unsolicited
+// incremental on_search (time.label disable / enable). The reply shows next to the buttons.
+function sellerSwitch(providerId) {
+  const note = el('span', { class: 'muted' });
+  const button = (event, text, cls) => el('button', { class: cls, type: 'button', onclick: async (e) => {
+    if (!bapId()) return void (note.textContent = 'Enter your bap_uri (or bap_id) under Endpoints first.');
+    e.currentTarget.disabled = true;
+    try {
+      const r = await post('/api/mock/push', R.providerPush({ bap: pushBap(), providerId, event }), { 'X-Mock-Deliver': 'wait' });
+      const delivery = r.callbacks?.[0]?.delivery;
+      note.textContent = r.response?.error ? `NACK: ${r.response.error.message}` : `on_search sent · your app answered ${delivery?.status ?? delivery?.error ?? '?'}`;
+      poll(true);
+    } catch (err) {
+      note.textContent = `Failed: ${err.message}`;
+    } finally {
+      e.currentTarget.disabled = false;
+    }
+  } }, text);
+  return el('span', { class: 'actions' }, button('provider_disable', 'Deactivate seller', 'ghost danger'), button('provider_enable', 'Activate seller', 'ghost'), note);
 }
 
 // ---- retailers ------------------------------------------------------------------------------

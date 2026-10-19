@@ -75,6 +75,14 @@ Mock-only endpoints (not ONDC):
 - `POST /api/mock/push { order_id, event }`: the seller acts on a confirmed order. `event` is
   `packed | out_for_delivery | delivered` (unsolicited `on_status`) or `seller_cancel`
   (unsolicited `on_cancel`, reason 005).
+- `POST /api/mock/push { event: provider_disable | provider_enable, provider_id, bap_uri?, bap_id? }`:
+  the seller deactivates / reactivates a provider for that buyer app (unsolicited incremental
+  `on_search`, header `inc`, new transaction). `disable` sends only `{ id, time: { label: "disable" } }`
+  (soft delete from the buyer's cache); `enable` sends the whole provider with `time.label: "enable"`.
+  While disabled, the full catalogue leaves the provider out and `/select`, `/init`, `/confirm` on it
+  get **30021** (Merchant inactive). Pass `bap_uri` or `bap_id`; the other is taken from the apps that
+  called recently. Also on the **Catalogue** tab: *Deactivate seller* / *Activate seller* per provider.
+  Pressing ▶ on any flow starts with every provider active.
 - `GET /api/mock/mode?bap_id=…`, `POST /api/mock/mode { bap_id, mode, items?, scenario? }`: the
   seller mode for a buyer app (below). It lasts 24h; set `normal` to switch it off.
 - `GET /api/mock/activity?bap_id=…`: the calls from that buyer app (last 50, with callbacks and the
@@ -109,17 +117,36 @@ items the buyer actually ordered: the ones named for the mode, else the first it
 ## Offers
 
 Every offer is published in the full catalogue `on_search` (`offers` per provider): discount
-(percent and flat), slab by quantity, weight and value, freebie, buy X get Y, combo.
+(percent and flat), slab by quantity, weight and value, freebie, buy X get Y, combo. The rules
+follow the retail-seller-service offers flow:
 
-- **`/select`:** `on_select` lists every offer the cart qualifies for, opt-in ones included, as `offer`
-  breakup lines (with the `offer` tag: `type`, `additive`, `auto`, plus `item_id` / `item_count` /
-  `item_value` for freebie and buy X get Y). **Only `auto: yes` offers are applied** (all auto +
-  additive ones, plus the first auto non-additive one), and only those count in `quote.price`.
-  Offers the buyer sends on `/select` are ignored.
-- **`/init`:** the buyer sends its selection in `order.offers`. The seller validates it and applies
-  exactly that selection, dropping offers the cart doesn't qualify for and keeping only the first of
-  the non-additive ones. `on_init` returns the applied ones in `order.offers` and the quote.
-  `/confirm` does the same, so the quote matches `on_init`.
+- **Eligible:** time-valid, matching the cart (items, categories, locations; a combo needs any
+  primary item and every secondary one), qualifier met and a discount above 0. Unknown, expired or
+  duplicate offer ids are skipped silently. Freebie / buy X get Y are worth the free item's unit
+  price (from the cart, else the benefit's `item_value`) × `item_count`.
+- **Exclusive (`additive: no`)** blocks every other offer, additive ones included. Of several
+  exclusive candidates the highest discount wins.
+- **`/select`:** `on_select` lists every eligible offer as an `offer` breakup line with its potential
+  discount; only the applied ones count in `quote.price`. With no offer ids from the buyer: every
+  `auto: yes, additive: yes` offer; only when there is none, the best `auto: yes, additive: no` one.
+  With offer ids: the buyer wins over auto (the best selected exclusive alone, else the selected
+  additive ones plus every auto additive one). A line that was not applied is sent with `auto: no`.
+- **`/init`, `/confirm`:** only the ids the buyer sends in `order.offers` (auto offers are not
+  auto-applied, so the buyer carries them forward), same exclusive rule, re-evaluated on the current
+  cart. Only the applied offers are listed, and returned in `order.offers`.
+- The total never goes below `0.00`.
+
+| Provider | Offer | auto / additive |
+|---|---|---|
+| P1 | `discp10` 10% Atta, `flat50` ₹50 Yippee | no / yes |
+| P1 | `slab1`, `slab2` (Atta 5kg qty), `freebie1`, `combo1` | yes / no |
+| P1 | `expired1` (published, expired) | yes / yes |
+| P2 | `flat150` Tea & Coffee | yes / yes |
+| P2 | `disc5` Kissan & Knorr | no / yes |
+| P2 | `slabw1`, `slabw2` (Surf Excel weight) | yes / no |
+| P2 | `excl300` Surf Excel | no / no |
+| P3 | `slabv1` Appy Fizz value | yes / yes |
+| P3 | `buy2get1` Frooti | yes / no |
 
 ## Providers
 
@@ -163,13 +190,16 @@ carts, and the live tracker against a buyer app's calls.
 | | Minimum order value | Cart below the provider's minimum → **30023**; the buyer scales up and re-selects |
 | | Quantity reduced at init | mode `init_qty_reduced` → re-select → re-init |
 | | Seller rejects confirm | mode `confirm_rejected` |
+| | Seller inactive, then active again | Unsolicited `on_search` disable → `/select` gets 30021 → `on_search` enable → order goes through |
 | Offers | Discount - opt-in | `discp10` listed but not applied at select; selected at init |
 | | Discount - flat amount | `flat150` (auto + additive) |
 | | Slab - by quantity / weight / value | `slab1`/`slab2`, `slabw1`/`slabw2`, `slabv1` |
-| | Freebie | `freebie1`: free I7 with 10 × I6 |
-| | Buy X get Y | `buy2get1` on Frooti |
+| | Freebie | `freebie1`: free I7 with 10 × I6 (-380.00) |
+| | Buy X get Y | `buy2get1` on Frooti (-300.00) |
 | | Combo | `combo1`: Atta + both B Natural packs |
-| | Stacking | Select applies slab2; the buyer chooses freebie1 + discp10 at init |
+| | Init - exclusive blocks additive | Select applies slab2; the buyer sends freebie1 + discp10 at init: freebie1 alone |
+| | Select 1-9 | The nine on_select cases of the offers flow: auto priority, opt-in additive, exclusive, mixed ids, opt-in only, single auto exclusive, buyer override (exclusive and additive), best auto exclusive |
+| | Edge - invalid ids / cart changed | Unknown, expired, duplicate ids skipped; a stale offer at init dropped |
 | Retailer (P2P) | customer_id / phone + PAN / new retailer | Optional P2P answers |
 | Post-order | Status and delivery | `/status`, then seller pushes Packed → Out-for-delivery → Order-delivered |
 | | Buyer cancels | `/cancel` (reason 053) → `on_cancel` |
