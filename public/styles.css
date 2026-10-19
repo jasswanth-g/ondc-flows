@@ -44,7 +44,9 @@ select { font: inherit; padding: 7px 10px; border: 1px solid var(--border); bord
 
 button { font: inherit; font-weight: 600; background: var(--accent); color: var(--accent-text); border: 1px solid var(--accent); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
 button.ghost { background: transparent; color: var(--text); border-color: var(--border); font-weight: 500; }
-button:disabled { opacity: .55; cursor: progress; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+button[data-busy="1"] { cursor: progress; }
+input.needs { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn) inset; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 
 

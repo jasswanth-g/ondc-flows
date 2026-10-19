@@ -44,11 +44,13 @@ function refreshTarget() {
   store.set('bapUri', bapUriInput.value.trim());
   store.set('bapId', bapIdInput.value.trim());
   const t = target();
+  bapUriInput.classList.toggle('needs', !t);
   $('#targetHint').replaceChildren(...(t
     ? ['▶ POSTs each callback to ', el('code', {}, `${t.uri}/on_<action>`), ' as ', el('code', {}, t.id), ' and shows what your buyer app answered.']
-    : ['Enter your buyer app\'s bap_uri to enable ▶. Without it you can still Preview every callback.']));
-  for (const b of document.querySelectorAll('[data-needs-target]')) b.disabled = !t || b.dataset.busy === '1' || Boolean(b.closest('.locked'));
+    : [el('b', {}, 'Enter your buyer app\'s bap_uri to enable ▶.'), ' Without it you can still Preview every callback.']));
+  for (const b of document.querySelectorAll('[data-needs-target]')) refreshButton(b);
   armBtn.disabled = !t;
+  armBtn.title = t ? '' : 'Enter your buyer app\'s bap_uri above';
 }
 bapUriInput.oninput = refreshTarget;
 bapIdInput.oninput = refreshTarget;
@@ -171,9 +173,21 @@ function showTab(name) {
 for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => showTab(b.dataset.tab);
 
 // ---- scenarios ------------------------------------------------------------------------------
+// Why a button can't be pressed right now, or '' when it can. Shown as its tooltip.
+function blockedReason(btn) {
+  if (btn.dataset.busy === '1') return 'Running…';
+  if (btn.closest('.locked')) return 'Run the previous step first';
+  if (btn.dataset.needsTarget !== undefined && !target()) return 'Enter your buyer app\'s bap_uri above to play';
+  return '';
+}
+function refreshButton(btn) {
+  const reason = blockedReason(btn);
+  btn.disabled = Boolean(reason);
+  btn.title = reason;
+}
 function busy(btn, on) {
   btn.dataset.busy = on ? '1' : '';
-  btn.disabled = on || (btn.dataset.needsTarget !== undefined && !target()) || Boolean(btn.closest('.locked'));
+  refreshButton(btn);
 }
 
 const label = (step) => (step.action === 'push' ? 'seller push (mock)' : `/${step.action} → /on_${step.action}`);
@@ -264,8 +278,8 @@ async function openScenario(sc) {
   // A step unlocks once every earlier step has produced its expected response.
   const refreshSteps = () => rows.forEach((r, i) => {
     r.row.classList.toggle('locked', i > done);
-    if (r.playBtn.dataset.busy !== '1') r.playBtn.disabled = i > done || !target();
-    if (r.previewBtn.dataset.busy !== '1') r.previewBtn.disabled = i > done;
+    refreshButton(r.playBtn);
+    refreshButton(r.previewBtn);
   });
   const runAll = (play) => async (e) => {
     busy(e.currentTarget, true);
