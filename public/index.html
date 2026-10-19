@@ -45,6 +45,7 @@
 
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="flows" aria-selected="true">Flows</button>
+      <button role="tab" data-tab="orders">Orders <span class="count" id="orderCount"></span></button>
       <button role="tab" data-tab="activity">All calls <span class="count" id="activityCount"></span></button>
       <button role="tab" data-tab="catalogue">Catalogue</button>
       <button role="tab" data-tab="retailers">Retailers</button>
@@ -66,8 +67,14 @@
       </div>
     </section>
 
+    <section id="tab-orders" class="tab" hidden>
+      <div class="orders-layout">
+        <div class="order-list" id="orderList"></div>
+        <article class="card order-detail" id="orderDetail"></article>
+      </div>
+    </section>
+
     <section id="tab-activity" class="tab" hidden>
-      <div id="orders"></div>
       <div class="activity-head">
         <h2>Every call from your buyer app</h2>
         <span class="muted" id="activityState"></span>

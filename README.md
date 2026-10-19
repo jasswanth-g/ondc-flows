@@ -22,7 +22,12 @@ The playground (`/`) works like the ONDC Workbench's flow testing:
 5. Click any card to see its actual JSON on the right: **Request** (what your app sent, or the
    callback the mock sent), **Response** (the mock's ACK, or your app's reply to the callback),
    **Guide** (what to do in the app and what the mock answers). **Follow live** tracks the latest.
-6. **All calls** lists every call from your app; **■** stops the flow (seller back to normal).
+6. **Orders** lists every order your app confirmed. The selected order shows its state and
+   fulfillment state, seller, retailer, delivery, payment, items, applied offers, quote totals, its
+   history (confirm → packed → … or cancel, and by whom) and the calls that touched it, plus the
+   seller's actions on it (Packed, Out for delivery, Delivered, Seller cancels, ↻ Re-send current
+   status) and its JSON.
+7. **All calls** lists every call from your app; **■** stops the flow (seller back to normal).
 
 Order flows take **any items**: the seller mode acts on whatever the app ordered (the first item,
 or the items given to `/api/mock/mode`). Only offer flows name items, because each offer qualifies
@@ -74,7 +79,10 @@ Mock-only endpoints (not ONDC):
 
 - `POST /api/mock/push { order_id, event }`: the seller acts on a confirmed order. `event` is
   `packed | out_for_delivery | delivered` (unsolicited `on_status`) or `seller_cancel`
-  (unsolicited `on_cancel`, reason 005).
+  (unsolicited `on_cancel`, reason 005) or `resend_status` (the order's current state again, in any
+  state: `on_cancel` for a cancelled order, else `on_status`; the state is unchanged and `updated_at` is
+  stamped now, so an app that skips callbacks it has already seen still processes it - use it when
+  your app missed or mishandled a callback).
 - `POST /api/mock/push { event: provider_disable | provider_enable, provider_id, bap_uri?, bap_id? }`:
   the seller deactivates / reactivates a provider for that buyer app (unsolicited incremental
   `on_search`, header `inc`, new transaction). `disable` sends only `{ id, time: { label: "disable" } }`
@@ -107,7 +115,7 @@ items the buyer actually ordered: the ones named for the mode, else the first it
 - **Your buyer app:** activating a scenario arms its mode for the app's `bap_id`
   (`POST /api/mock/mode`); every call from that `bap_id` then gets it, on whatever items it orders.
 - **curl / tests:** send the mode on the request as `X-Mock-Mode`, with `X-Mock-Mode-Items`
-  for the affected items. The header wins over the armed mode.
+  for the affected items (item UUIDs, comma-separated). The header wins over the armed mode.
 - **A mode acts once per flow run** (from ▶ until Restart / Stop) **and is remembered for it.** A
   re-select or re-init may use a new `transaction_id` / `message_id`: it still sees the same seller,
   so a disabled item stays disabled and a halved quantity is not halved again.
@@ -150,11 +158,17 @@ follow the retail-seller-service offers flow:
 
 ## Providers
 
-| Provider | Locations | Items | Minimum order value |
-|---|---|---|---|
-| **P1** ABC Distributors × ITC (distributor) | L1 Jayanagar, L2 BTM Layout | 8 | 500.00 |
-| **P2** XYZ Distributors × HUL (distributor) | L3 Whitefield | 7 | 2000.00 |
-| **P3** Ganesh Wholesale × Parle Agro (wholesaler) | L4 Peenya | 5 | 1500.00 |
+**Ids are fixed UUIDs**: providers, locations, fulfillments, items and offers
+(`public/shared/ids.js`). The short names in this README and the playground (P1, L1, F2, I7,
+discp10, ...) are only labels; payloads carry the UUIDs. The Catalogue tab shows each label with its
+UUID (hover, click to copy). Not UUIDs, per the contract: variant group ids (`V1`...: alphanumeric,
+up to 12) and order ids (alphanumeric, up to 32, issued by the buyer app).
+
+| Provider | `provider.id` | Locations | Items | Minimum order value |
+|---|---|---|---|---|
+| **P1** ABC Distributors × ITC (distributor) | `5189c211-71f4-481e-b6ee-b321ed330911` | L1 Jayanagar, L2 BTM Layout | 8 | 500.00 |
+| **P2** XYZ Distributors × HUL (distributor) | `9f4a2727-23f8-42dc-a5ab-3523442e0b4d` | L3 Whitefield | 7 | 2000.00 |
+| **P3** Ganesh Wholesale × Parle Agro (wholesaler) | `50d9bcd0-0372-48ba-99d8-ae98cb1ebf9b` | L4 Peenya | 5 | 1500.00 |
 
 P1 offers two delivery options: F1 `Standard Delivery` (beat, P2D) and F2 `Immediate Delivery`
 (tomorrow, P1D). P2 and P3 offer F1 only.

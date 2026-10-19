@@ -1,3 +1,4 @@
+import { P1, P2, P3, ID } from './ids.js';
 // Retailers already held by the mock Seller NP (shared by the server and the playground).
 // `providers` maps provider id -> that retailer's terms with the provider. The same outlet code
 // (customer_id) is returned by every provider serving the retailer.
@@ -13,8 +14,8 @@ export const RETAILERS = [
     address: { name: 'Shop No. 12', building: 'Lakshmi Complex', locality: 'MG Road', city: 'Bengaluru', state: 'Karnataka', country: 'IND', area_code: '560001' },
     gps: '12.9756,77.6066',
     providers: {
-      P1: { credit_limit: '25000.00', poc: { name: 'Rajesh Kumar', phone: '9876500011', email: 'rajesh.kumar@abcdist.example' } },
-      P2: { credit_limit: '10000.00', poc: { name: 'Anita Rao', phone: '9845012345', email: 'anita.rao@xyzdist.example' } },
+      [P1]: { credit_limit: '25000.00', poc: { name: 'Rajesh Kumar', phone: '9876500011', email: 'rajesh.kumar@abcdist.example' } },
+      [P2]: { credit_limit: '10000.00', poc: { name: 'Anita Rao', phone: '9845012345', email: 'anita.rao@xyzdist.example' } },
     },
   },
   {
@@ -28,7 +29,7 @@ export const RETAILERS = [
     address: { name: 'No. 45', building: 'Sai Arcade', locality: 'Whitefield Main Road', city: 'Bengaluru', state: 'Karnataka', country: 'IND', area_code: '560066' },
     gps: '12.9698,77.7499',
     providers: {
-      P2: { credit_limit: '15000.00', poc: { name: 'Anita Rao', phone: '9845012345', email: 'anita.rao@xyzdist.example' } },
+      [P2]: { credit_limit: '15000.00', poc: { name: 'Anita Rao', phone: '9845012345', email: 'anita.rao@xyzdist.example' } },
     },
   },
   {
@@ -42,7 +43,7 @@ export const RETAILERS = [
     address: { name: 'Shop 3', building: 'Ganesh Towers', locality: '9th Main Road', city: 'Bengaluru', state: 'Karnataka', country: 'IND', area_code: '560041' },
     gps: '12.9279,77.5831',
     providers: {
-      P1: { credit_limit: '20000.00', poc: { name: 'Suresh Gowda', phone: '9876500022', email: 'suresh.gowda@abcdist.example' } },
+      [P1]: { credit_limit: '20000.00', poc: { name: 'Suresh Gowda', phone: '9876500022', email: 'suresh.gowda@abcdist.example' } },
     },
   },
 ];

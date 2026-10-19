@@ -1,5 +1,6 @@
 import { SCENARIOS, newState, expectText, buyerText, trackLive, PUSH_LABELS } from './shared/scenarios.js';
 import { RETAILERS, NEW_RETAILER, WALK_IN_RETAILER } from './shared/retailers.js';
+import { ID, label } from './shared/ids.js';
 import * as R from './shared/requests.js';
 
 // The buyer app makes every ONDC call; the mock only answers. This page:
@@ -366,11 +367,11 @@ async function poll(force = false) {
     try {
       const data = await fetch(`/api/mock/activity?bap_id=${encodeURIComponent(bapId())}`, { cache: 'no-store' }).then((r) => r.json());
       track(data.activity);
-      const key = data.activity.map((a) => a.id + a.status).join() + json(data.orders.map((o) => [o.id, o.state, o.fulfillment_state]));
+      const key = data.activity.map((a) => a.id + a.status).join() + json(data.orders.map((o) => [o.id, o.state, o.fulfillment_state, o.history.length]));
       if (force || key !== seenAll) {
         seenAll = key;
         renderActivity(data.activity);
-        renderOrders(data.orders);
+        renderOrders(data.orders, data.activity);
       }
       $('#activityCount').textContent = data.activity.length ? String(data.activity.length) : '';
       $('#activityState').textContent = `live · updated ${new Date().toLocaleTimeString()}`;
@@ -379,7 +380,7 @@ async function poll(force = false) {
     }
   } else {
     $('#activity').replaceChildren(el('p', { class: 'muted' }, 'Enter your app\'s bap_uri or bap_id above to see its calls.'));
-    $('#orders').replaceChildren();
+    renderOrders([]);
   }
   pollTimer = setTimeout(poll, runningScenario() ? 1000 : 3000);
 }
@@ -440,32 +441,151 @@ function renderActivity(entries) {
   }));
 }
 
-// Seller actions by hand, on any order the app confirmed (flows send them automatically).
+// ---- orders ---------------------------------------------------------------------------------
+// Every order the app confirmed through the mock: a list, and the selected order in detail (items,
+// offers, quote, delivery, payment, its history and its calls), with the seller's actions on it.
 const PUSH_EVENTS = ['packed', 'out_for_delivery', 'delivered', 'seller_cancel'];
-function renderOrders(orders) {
-  if (!orders.length) return $('#orders').replaceChildren();
-  $('#orders').replaceChildren(el('section', { class: 'card' },
-    el('h2', {}, 'Orders from your app'),
-    el('p', { class: 'muted' }, 'Send a seller update by hand (an unsolicited on_status / on_cancel to your app).'),
-    el('div', { class: 'table-wrap' }, el('table', {},
-      el('thead', {}, el('tr', {}, ...['order', 'provider', 'total', 'state', 'fulfillment', ''].map((h) => el('th', {}, h)))),
-      el('tbody', {}, orders.map((o) => el('tr', {},
-        el('td', {}, el('code', {}, o.id)),
-        el('td', {}, o.provider),
-        el('td', { class: 'num' }, `₹${o.total}`),
-        el('td', {}, o.state),
-        el('td', {}, o.fulfillment_state),
-        el('td', { class: 'actions' }, PUSH_EVENTS.map((ev) => {
-          const done = ['Cancelled', 'Completed'].includes(o.state);
-          return el('button', { class: ev === 'seller_cancel' ? 'ghost danger' : 'ghost', type: 'button', ...(done ? { disabled: '', title: `Order is ${o.state}` } : {}), onclick: async (e) => {
-            e.currentTarget.disabled = true;
-            await post('/api/mock/push', { order_id: o.id, event: ev }, { 'X-Mock-Deliver': 'wait' });
-            poll(true);
-          } }, PUSH_LABELS[ev]);
-        })),
+const STATE_CLASS = { Accepted: 'ok', 'In-progress': 'warn', Completed: 'ok', Cancelled: 'bad' };
+const EVENT_LABELS = { resend: 'Status re-sent', confirm: 'Order confirmed', packed: 'Packed', out_for_delivery: 'Out for delivery', delivered: 'Delivered', cancel: 'Cancelled' };
+let selectedOrder = null;
+let ordersSeen = { orders: [], activity: [] };
+
+const when = (t) => (t ? new Date(t).toLocaleString() : '—');
+const rupees = (v) => `₹${Number(v ?? 0).toFixed(2)}`;
+const statePill = (state) => el('span', { class: `pill ${STATE_CLASS[state] ?? ''}` }, state ?? '—');
+// An id as its short label, with the full id on hover and one click to copy it.
+const idTag = (id) => el('code', { class: 'id-tag', title: `${id} (click to copy)`, onclick: () => navigator.clipboard?.writeText(id) }, label(id));
+
+// The calls that belong to an order: its /confirm, /status, /cancel and the seller's pushes on it.
+const callsOf = (orderId, activity) => activity.filter((a) => a.request?.message?.order?.id === orderId
+  || a.request?.message?.order_id === orderId || a.request?.order_id === orderId).slice().reverse();
+
+function renderOrders(orders, activity = []) {
+  ordersSeen = { orders, activity };
+  $('#orderCount').textContent = orders.length ? String(orders.length) : '';
+  if (!bapId()) {
+    $('#orderList').replaceChildren(el('p', { class: 'muted' }, 'Enter your app\'s bap_uri or bap_id above to see its orders.'));
+    return void $('#orderDetail').replaceChildren();
+  }
+  if (!orders.length) {
+    $('#orderList').replaceChildren(el('section', { class: 'card' }, el('p', { class: 'muted' }, 'No orders yet. Orders your app confirms through the mock (/confirm → on_confirm Accepted) show up here.')));
+    return void $('#orderDetail').replaceChildren(el('p', { class: 'muted' }, 'Select an order.'));
+  }
+  if (!orders.some((o) => o.id === selectedOrder)) selectedOrder = orders[0].id;
+  $('#orderList').replaceChildren(...orders.map((o) => el('button', {
+    class: `order-row ${o.id === selectedOrder ? 'selected' : ''}`, type: 'button',
+    onclick: () => { selectedOrder = o.id; renderOrders(ordersSeen.orders, ordersSeen.activity); },
+  },
+    el('span', { class: 'order-row-top' }, el('code', {}, o.id), statePill(o.state)),
+    el('span', { class: 'order-row-mid' }, `${label(o.provider)} · ${o.order.provider?.descriptor?.short_desc ?? ''}`, el('b', {}, rupees(o.total))),
+    el('span', { class: 'muted order-row-bot' }, `${o.retailer ?? 'walk-in'} · ${o.fulfillment_state ?? ''} · ${when(o.updated_at)}`),
+  )));
+  renderOrderDetail(orders.find((o) => o.id === selectedOrder), activity);
+}
+
+function renderOrderDetail(o, activity) {
+  const order = o.order;
+  const f = order.fulfillments?.[0] ?? {};
+  const pay = order.payments?.[0] ?? {};
+  const breakup = order.quote?.breakup ?? [];
+  const lines = breakup.filter((b) => b['@ondc/org/title_type'] === 'item');
+  const offers = breakup.filter((b) => b['@ondc/org/title_type'] === 'offer');
+  const sum = (type) => breakup.filter((b) => b['@ondc/org/title_type'] === type).reduce((t, b) => t + Number(b.price.value), 0);
+  const closed = ['Cancelled', 'Completed'].includes(order.state);
+  const note = el('span', { class: 'muted' });
+  const kv = (rows) => el('dl', { class: 'kv' }, ...rows.filter(([, v]) => v !== undefined && v !== null && v !== '').flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, v)]));
+  const section = (title, ...kids) => el('section', { class: 'order-section' }, el('h4', {}, title), ...kids);
+  const address = (a) => (a ? [a.building, a.locality, a.street, a.city, a.area_code].filter(Boolean).join(', ') : undefined);
+
+  $('#orderDetail').replaceChildren(
+    el('header', { class: 'order-head' },
+      el('div', {},
+        el('h3', {}, 'Order ', el('code', {}, order.id)),
+        el('span', { class: 'muted' }, `txn ${o.transaction_id} · placed ${when(order.created_at)} · updated ${when(order.updated_at)}`)),
+      el('div', { class: 'order-states' }, statePill(order.state), el('span', { class: 'pill' }, `fulfillment: ${o.fulfillment_state ?? '—'}`))),
+    el('div', { class: 'order-actions' },
+      el('span', { class: 'label' }, 'Seller actions'),
+      ...PUSH_EVENTS.map((ev) => el('button', {
+        class: ev === 'seller_cancel' ? 'ghost danger' : 'ghost', type: 'button',
+        ...(closed ? { disabled: '', title: `Order is ${order.state}` } : { title: ev === 'seller_cancel' ? 'Unsolicited on_cancel (reason 005)' : 'Unsolicited on_status' }),
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          const r = await post('/api/mock/push', { order_id: order.id, event: ev }, { 'X-Mock-Deliver': 'wait' }).catch((err) => ({ failed: err.message }));
+          const d = r.callbacks?.[0]?.delivery;
+          note.textContent = r.failed ? `Failed: ${r.failed}` : r.response?.error ? `NACK ${r.response.error.code}: ${r.response.error.message}` : `${r.callbacks[0].body.context.action} sent · your app answered ${d?.status ?? d?.error ?? '?'}`;
+          poll(true);
+        },
+      }, PUSH_LABELS[ev])),
+      el('button', {
+        class: 'ghost', type: 'button', title: `Unsolicited ${order.state === 'Cancelled' ? 'on_cancel' : 'on_status'} with the order as it is now (${order.state} / ${o.fulfillment_state ?? '—'}), updated_at stamped now`,
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          const r = await post('/api/mock/push', { order_id: order.id, event: 'resend_status' }, { 'X-Mock-Deliver': 'wait' }).catch((err) => ({ failed: err.message }));
+          const d = r.callbacks?.[0]?.delivery;
+          note.textContent = r.failed ? `Failed: ${r.failed}` : r.response?.error ? `NACK ${r.response.error.code}: ${r.response.error.message}` : `${r.callbacks?.[0]?.body?.context?.action} (${order.state} / ${o.fulfillment_state ?? '—'}) re-sent · your app answered ${d?.status ?? d?.error ?? '?'}`;
+          poll(true);
+        },
+      }, `↻ ${PUSH_LABELS.resend_status}`),
+      note),
+    el('div', { class: 'order-grid' },
+      section('Seller', kv([
+        ['Provider', el('span', {}, `${order.provider?.descriptor?.short_desc ?? ''} × ${order.provider?.descriptor?.name ?? ''} `, idTag(order.provider?.id))],
+        ['Ships from', f.start?.location ? el('span', {}, `${f.start.location.descriptor?.name ?? ''} `, idTag(f.start.location.id)) : undefined],
+        ['Contact', f.start?.contact ? `${f.start.contact.phone} · ${f.start.contact.email}` : undefined],
+      ])),
+      section('Retailer', kv([
+        ['Billing name', order.billing?.name],
+        ['GSTIN', order.billing?.tax_number],
+        ['customer.id', f.customer?.id ?? 'walk-in'],
+        ['Phone', order.billing?.phone ?? f.end?.contact?.phone],
+        ['Address', address(order.billing?.address)],
+      ])),
+      section('Delivery', kv([
+        ['Option', el('span', {}, `${f['@ondc/org/category'] ?? ''} `, idTag(f.id))],
+        ['TAT', f['@ondc/org/TAT']],
+        ['State', o.fulfillment_state],
+        ['Deliver to', address(f.end?.location?.address)],
+        ['GPS', f.end?.location?.gps],
+      ])),
+      section('Payment', kv([
+        ['Type', pay.type],
+        ['Collected by', pay.collected_by],
+        ['Status', pay.status],
+        ['Amount', pay.params?.amount && rupees(pay.params.amount)],
+        ['Settlement', [pay['@ondc/org/settlement_basis'], pay['@ondc/org/settlement_window']].filter(Boolean).join(' · ')],
+      ])),
+    ),
+    section('Items', el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...['item', 'name', 'qty', 'unit price', 'amount'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, lines.map((b) => el('tr', {},
+        el('td', {}, idTag(b['@ondc/org/item_id'])),
+        el('td', {}, b.title),
+        el('td', { class: 'num' }, String(b['@ondc/org/item_quantity']?.count ?? '')),
+        el('td', { class: 'num' }, rupees(b.item?.price?.value)),
+        el('td', { class: 'num' }, rupees(b.price.value)),
       ))),
-    )),
-  ));
+    ))),
+    offers.length ? section('Offers applied', el('ul', { class: 'plain' }, offers.map((b) => el('li', {}, idTag(b['@ondc/org/item_id']), ` ${b.title} `, el('b', {}, rupees(b.price.value)))))) : null,
+    section('Quote', el('dl', { class: 'kv totals' },
+      el('dt', {}, 'Items'), el('dd', {}, rupees(sum('item'))),
+      el('dt', {}, 'Offers'), el('dd', {}, rupees(sum('offer'))),
+      el('dt', {}, 'Delivery'), el('dd', {}, rupees(sum('delivery'))),
+      el('dt', {}, 'Tax'), el('dd', {}, rupees(sum('tax'))),
+      el('dt', {}, el('b', {}, 'Total')), el('dd', {}, el('b', {}, rupees(order.quote?.price?.value))))),
+    section('History', el('ol', { class: 'timeline' }, (o.history.length ? o.history : [{ at: order.created_at, event: 'confirm', by: 'buyer', state: order.state }]).map((h) => el('li', {},
+      el('b', {}, EVENT_LABELS[h.event] ?? h.event), ` · by ${h.by}`, h.reason ? ` · reason ${h.reason}` : '',
+      el('span', { class: 'muted' }, ` · ${h.state}${h.fulfillment_state ? ` / ${h.fulfillment_state}` : ''} · ${when(h.at)}`))))),
+    section('Calls for this order', (() => {
+      const calls = callsOf(order.id, activity);
+      if (!calls.length) return el('p', { class: 'muted' }, 'None in the recent activity log.');
+      return el('ul', { class: 'plain calls' }, calls.map((a) => {
+        const cbs = a.callbacks ?? [];
+        const answered = cbs.map((c) => `${c.body?.context?.action} → ${c.delivery?.status ?? c.delivery?.error ?? (a.status === 'running' ? 'sending…' : '?')}`).join(', ');
+        return el('li', {}, el('code', {}, a.kind === 'seller_action' ? `seller ${a.request?.event}` : `/${a.action}`), ` ${a.response?.message?.ack?.status ?? ''} · ${answered} `, el('span', { class: 'muted' }, when(a.at)));
+      }));
+    })()),
+    el('details', { class: 'order-json' }, el('summary', {}, 'Order JSON (as the seller holds it)'), el('pre', {}, json(order))),
+  );
 }
 
 // ---- catalogue ------------------------------------------------------------------------------
@@ -476,9 +596,9 @@ function offersTable(p) {
   return el('div', { class: 'table-wrap offers' }, el('table', {},
     el('thead', {}, el('tr', {}, ...['offer', 'type', 'items', 'qualifier', 'benefit', 'meta'].map((h) => el('th', {}, h)))),
     el('tbody', {}, p.offers.map((o) => el('tr', {},
-      el('td', {}, el('code', {}, o.id)),
+      el('td', {}, idTag(o.id)),
       el('td', {}, o.descriptor.code),
-      el('td', {}, o.item_ids.join(', ')),
+      el('td', {}, ...o.item_ids.map(idTag)),
       el('td', {}, tagList(o.tags, 'qualifier')),
       el('td', {}, tagList(o.tags, 'benefit')),
       el('td', {}, tagList(o.tags, 'meta')),
@@ -497,19 +617,20 @@ async function loadCatalogue() {
     const minOrder = p.tags.find((t) => t.code === 'order_value').list[0].value;
     const rows = p.items.map((i) => el('tr', {},
       el('td', {}, el('img', { class: 'thumb', src: i.descriptor.symbol, alt: '' })),
-      el('td', {}, el('code', {}, i.id)),
+      el('td', {}, idTag(i.id)),
       el('td', {}, i.descriptor.name),
-      el('td', {}, i.parent_item_id ?? '—'),
+      el('td', {}, i.parent_item_id ? idTag(i.parent_item_id) : '—'),
       el('td', {}, i.category_id),
-      el('td', {}, i.location_id),
+      el('td', {}, idTag(i.location_id)),
       el('td', { class: 'num' }, `₹${i.price.value}`),
       el('td', { class: 'num' }, `₹${i.price.maximum_value}`),
       el('td', { class: 'num' }, `${i.quantity.minimum.count} – ${i.quantity.maximum.count}`),
     ));
     box.append(el('section', { class: 'card provider' },
       el('header', {},
-        el('h3', {}, `${p.id} · ${p.descriptor.short_desc} × ${p.descriptor.name}`),
-        el('span', { class: 'muted' }, `${p.descriptor.code} · locations ${p.locations.map((l) => `${l.id} ${l.address.locality}`).join(', ')} · min order ₹${minOrder}`),
+        el('h3', {}, `${label(p.id)} · ${p.descriptor.short_desc} × ${p.descriptor.name}`),
+        el('code', { class: 'muted' }, `provider id ${p.id}`),
+        el('span', { class: 'muted' }, `${p.descriptor.code} · locations ${p.locations.map((l) => `${label(l.id)} ${l.address.locality}`).join(', ')} · min order ₹${minOrder}`),
         el('span', { class: 'pill' }, `serviceability: ${[...new Set(svc)].join(', ')} (pan-India)`),
         sellerSwitch(p.id),
       ),
@@ -552,7 +673,7 @@ function sellerSwitch(providerId) {
     el('td', {}, r.PAN ?? '—'),
     el('td', {}, r.GSTIN ?? '—'),
     el('td', {}, r.address.area_code),
-    el('td', {}, r.providers ? Object.entries(r.providers).map(([id, t]) => `${id} (credit ₹${t.credit_limit}, POC ${t.poc.name})`).join('; ') : r.kind === 'new' ? 'not held - register with P1' : 'P3 only - no registration'),
+    el('td', {}, r.providers ? Object.entries(r.providers).map(([id, t]) => `${label(id)} (credit ₹${t.credit_limit}, POC ${t.poc.name})`).join('; ') : r.kind === 'new' ? 'not held - register with P1' : 'P3 only - no registration'),
   ));
   $('#retailers').append(el('section', { class: 'card' },
     el('p', { class: 'muted' }, 'Retailers the mock Seller NP knows. A retailer is resolved when the request fully satisfies one type=existing variant: customer_id, or phone_number + PAN. Any other identity is "not found" (empty bpp/providers).'),

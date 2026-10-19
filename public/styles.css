@@ -244,3 +244,31 @@ button.tiny { padding: 2px 8px; font-size: 12px; margin-left: auto; }
 .chip-kv.warn { background: var(--bad-bg); color: var(--bad); }
 .banner { margin-bottom: 16px; font-size: 14px; }
 .banner.bad { border-color: var(--bad); background: var(--bad-bg); color: var(--text); }
+
+/* Orders */
+.orders-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.order-list { display: flex; flex-direction: column; gap: 8px; }
+.order-row { display: flex; flex-direction: column; gap: 4px; text-align: left; background: var(--surface); color: var(--text); border: 1px solid var(--border); font-weight: 400; padding: 10px 12px; }
+.order-row.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.order-row-top, .order-row-mid { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.order-row-bot { font-size: 12.5px; }
+.order-detail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.order-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.order-head h3 { margin: 0 0 2px; }
+.order-head .muted { font-size: 12.5px; overflow-wrap: anywhere; }
+.order-states { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
+.order-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; }
+.order-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.order-section h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 14px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv.totals { max-width: 320px; }
+.kv.totals dd { text-align: right; font-variant-numeric: tabular-nums; }
+.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.timeline { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.id-tag { cursor: copy; margin-right: 4px; }
+.order-json summary { cursor: pointer; color: var(--muted); }
+.order-json pre { margin-top: 8px; max-height: 420px; overflow: auto; }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+@media (max-width: 800px) { .orders-layout { grid-template-columns: 1fr; } }
