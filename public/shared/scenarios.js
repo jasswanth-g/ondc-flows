@@ -56,7 +56,7 @@ const searchStep = () => ({
 });
 
 const p2pStep = (name, build, expect, check) => ({
-  name, action: 'search', expect, build,
+  name, action: 'search', p2p: true, expect, build,
   buyer: () => 'Identify the retailer: the app sends a P2P /search (bpp_id set, fulfillment.customer).',
   absorb: (s, reply) => {
     // The last callback carries the customer id (for a new retailer, the unsolicited "created" one).
@@ -73,7 +73,9 @@ const selectStep = ({ lines, expect = 'Serviceable quote.', check, reselect = fa
   name: reselect ? 're-select → on_select' : 'select → on_select', action: 'select', expect, needsCatalog: true,
   buyer: buyer ?? ((s) => (reselect
     ? (Array.isArray(lines) ? `Change the cart to ${cartText(s, lines)}: the app sends /select again.` : 'Accept the seller\'s changes to the cart: the app sends /select again.')
-    : `Add ${cartText(s, lines ?? s.cart)} from ${s.providerId} and open the cart: the app sends /select.`)),
+    : s.anyItems
+      ? `Add any items to the cart${s.mode !== 'normal' ? ` (the seller mode hits ${s.modeItems?.length ? s.modeItems.join(', ') : 'the first item in the cart'})` : ''} and open it: the app sends /select.`
+      : `Add ${cartText(s, lines ?? s.cart)} from ${s.providerId} and open the cart: the app sends /select.`)),
   build: (env, s) => {
     const req = R.select({
       ...env, catalogProvider: providerOf(s), retailer: s.retailer,
@@ -150,9 +152,8 @@ export const SCENARIOS = [
     steps: [searchStep()],
   },
   {
-    id: 'place-order', group: 'Pre-order', title: 'Place order (positive)', providerId: 'P1', retailer: SHARMA,
-    cart: [{ id: 'I1', count: 20 }, { id: 'I6', count: 5 }],
-    summary: `Sharma Kirana (${SHARMA.customer_id}) orders from P1: select → init (pay on fulfillment, credit) → confirm.`,
+    id: 'place-order', anyItems: true, group: 'Pre-order', title: 'Place order (positive)', providerId: 'P1', retailer: SHARMA,
+    summary: 'Order any items: select → init (pay on fulfillment, credit for a known retailer) → confirm.',
     steps: [
       selectStep({ expect: 'Serviceable. Two delivery options: F1 Standard Delivery (beat, P2D) and F2 Immediate Delivery (tomorrow, P1D).',
         check: (r) => all(noError(r), fail(order(r).fulfillments.length === 2, 'expected 2 delivery options')) }),
@@ -161,8 +162,7 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'delivery-tomorrow', group: 'Pre-order', title: 'Place order - tomorrow delivery', providerId: 'P1', retailer: SHARMA,
-    cart: [{ id: 'I1', count: 20 }],
+    id: 'delivery-tomorrow', anyItems: true, group: 'Pre-order', title: 'Place order - tomorrow delivery', providerId: 'P1', retailer: SHARMA,
     summary: 'The buyer picks F2 (Immediate Delivery) from on_select instead of the beat day.',
     steps: [
       selectStep({ expect: 'F1 Standard Delivery and F2 Immediate Delivery offered.' }),
@@ -172,15 +172,8 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'place-order-p2', group: 'Pre-order', title: 'Place order - P2 (HUL)', providerId: 'P2', retailer: LAKSHMI,
-    cart: [{ id: 'I9', count: 10 }, { id: 'I12', count: 10 }],
-    summary: `Lakshmi Stores (${LAKSHMI.customer_id}) orders from P2; flat150 (auto) applies.`,
-    steps: placeOrder(),
-  },
-  {
-    id: 'place-order-prepaid', group: 'Pre-order', title: 'Place order - walk-in, prepaid (P3)', providerId: 'P3', retailer: WALK_IN_RETAILER,
-    cart: [{ id: 'I18', count: 5 }, { id: 'I20', count: 10 }],
-    summary: 'A retailer without a customer_id orders from P3. Payment ON-ORDER.',
+    id: 'place-order-prepaid', anyItems: true, group: 'Pre-order', title: 'Place order - walk-in, prepaid (P3)', providerId: 'P3', retailer: WALK_IN_RETAILER,
+    summary: 'Order any items and pay online (ON-ORDER): the seller returns its payment link in on_init.',
     steps: [
       selectStep(),
       initStep({ paymentType: 'ON-ORDER', expect: 'payments[0].type ON-ORDER with the seller\'s payment link (uri); no credit tag.',
@@ -189,8 +182,7 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'item-inactive', group: 'Pre-order', title: 'Item inactive', providerId: 'P1', retailer: SHARMA, mode: 'item_inactive',
-    cart: [{ id: 'I1', count: 20 }, { id: 'I2', count: 10 }],
+    id: 'item-inactive', anyItems: true, group: 'Pre-order', title: 'Item inactive', providerId: 'P1', retailer: SHARMA, mode: 'item_inactive',
     summary: 'The seller disables an item that is in the cart. It tells the buyer with an incremental on_search, and returns the item at qty 0.',
     steps: [
       selectStep({ expect: (s) => `First an unsolicited incremental on_search (header inc) with ${s.target} time.label "disable", then on_select with error 40002 and ${s.target} at qty 0.`,
@@ -205,8 +197,7 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'out-of-stock', group: 'Pre-order', title: 'Item out of stock', providerId: 'P2', retailer: LAKSHMI, mode: 'out_of_stock',
-    cart: [{ id: 'I13', count: 10 }, { id: 'I12', count: 10 }],
+    id: 'out-of-stock', anyItems: true, group: 'Pre-order', title: 'Item out of stock', providerId: 'P2', retailer: LAKSHMI, mode: 'out_of_stock',
     summary: 'The seller has none of the affected item left.',
     steps: [
       selectStep({ expect: (s) => `Error 40002, message [{"item_id":"${s.target}","error":"40002"}]; ${s.target} at qty 0.`,
@@ -217,8 +208,7 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'partial-quantity', group: 'Pre-order', title: 'Partial quantity available', providerId: 'P1', retailer: SHARMA, mode: 'partial_quantity',
-    cart: [{ id: 'I7', count: 20 }, { id: 'I1', count: 20 }],
+    id: 'partial-quantity', anyItems: true, group: 'Pre-order', title: 'Partial quantity available', providerId: 'P1', retailer: SHARMA, mode: 'partial_quantity',
     summary: 'The seller can supply only half of the affected item.',
     steps: [
       selectStep({ expect: (s) => `Error 40002; ${s.target} at ${half(qtyOf(s, s.target))} of ${qtyOf(s, s.target)}.`,
@@ -229,8 +219,7 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'price-changed', group: 'Pre-order', title: 'Price changed', providerId: 'P2', retailer: LAKSHMI, mode: 'price_changed',
-    cart: [{ id: 'I14', count: 12 }, { id: 'I12', count: 10 }],
+    id: 'price-changed', anyItems: true, group: 'Pre-order', title: 'Price changed', providerId: 'P2', retailer: LAKSHMI, mode: 'price_changed',
     summary: 'The seller now charges 5% more for the affected item than the catalogue says.',
     steps: [
       selectStep({ expect: (s) => `No error; ${s.target} item.price ${(Math.round(Number(catalogItem(s, s.target).price.value) * 105) / 100).toFixed(2)} instead of ${catalogItem(s, s.target).price.value}.`,
@@ -240,21 +229,20 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'min-order-value', group: 'Pre-order', title: 'Minimum order value not met', providerId: 'P2', retailer: LAKSHMI,
-    cart: [{ id: 'I9', count: 10 }],
-    summary: 'A cart below the provider\'s published order_value.min_value (P2: 2000.00). The buyer tops it up and re-selects.',
+    id: 'min-order-value', anyItems: true, cartRule: 'below_mov', group: 'Pre-order', title: 'Minimum order value not met', providerId: 'P2', retailer: LAKSHMI,
+    summary: 'A cart below the distributor\'s published order_value.min_value (P1 500, P2 2000, P3 1500). The buyer tops it up and re-selects.',
     steps: [
-      selectStep({ expect: (s) => `Cart ${cartValue(s, s.cart).toFixed(2)} < ${minOrderValue(s).toFixed(2)}: error 30023 with the quote still present (pre-order-service shows MOV_NOT_MET).`,
+      selectStep({ buyer: () => 'Add items worth less than the distributor\'s minimum order value (P1 ₹500, P2 ₹2000, P3 ₹1500) and open the cart: the app sends /select.',
+        expect: 'Error 30023 with the quote still present (pre-order-service shows MOV_NOT_MET).',
         check: (r) => fail(errorCode(r) === '30023' && order(r)?.quote, 'expected 30023 with a quote - is the cart below the minimum order value?') }),
       selectStep({ reselect: true, lines: scaleToMov, expect: 'Quantities scaled up to reach the minimum order value: no error.',
-        buyer: (s) => `Add items until the cart reaches ₹${minOrderValue(s).toFixed(2)}: the app sends /select again.` }),
+        buyer: () => 'Add items until the cart reaches the minimum order value: the app sends /select again.' }),
       initStep(),
       confirmStep(),
     ],
   },
   {
-    id: 'init-qty-reduced', group: 'Pre-order', title: 'Quantity reduced at init', providerId: 'P2', retailer: LAKSHMI, mode: 'init_qty_reduced',
-    cart: [{ id: 'I15', count: 10 }, { id: 'I12', count: 10 }],
+    id: 'init-qty-reduced', anyItems: true, group: 'Pre-order', title: 'Quantity reduced at init', providerId: 'P2', retailer: LAKSHMI, mode: 'init_qty_reduced',
     summary: 'Stock of the affected item halves between select and init. on_init returns the lower quantity; the buyer must select again.',
     steps: [
       selectStep({ expect: 'Everything available.' }),
@@ -266,8 +254,7 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'confirm-rejected', group: 'Pre-order', title: 'Seller rejects confirm', providerId: 'P2', retailer: LAKSHMI, mode: 'confirm_rejected',
-    cart: [{ id: 'I11', count: 20 }, { id: 'I12', count: 10 }],
+    id: 'confirm-rejected', anyItems: true, group: 'Pre-order', title: 'Seller rejects confirm', providerId: 'P2', retailer: LAKSHMI, mode: 'confirm_rejected',
     summary: 'Select and init succeed; the seller cannot confirm the order.',
     steps: [
       selectStep(),
@@ -399,8 +386,7 @@ export const SCENARIOS = [
 
   // Post-order
   {
-    id: 'post-order', group: 'Post-order', title: 'Post-order: status and delivery', providerId: 'P1', retailer: SHARMA,
-    cart: [{ id: 'I1', count: 20 }],
+    id: 'post-order', anyItems: true, group: 'Post-order', title: 'Post-order: status and delivery', providerId: 'P1', retailer: SHARMA,
     summary: 'After confirm: buyer /status, then the seller pushes Packed → Out-for-delivery → Order-delivered (unsolicited on_status).',
     steps: [
       ...placeOrder(),
@@ -411,14 +397,12 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'buyer-cancel', group: 'Post-order', title: 'Buyer cancels order', providerId: 'P1', retailer: SHARMA,
-    cart: [{ id: 'I1', count: 20 }],
+    id: 'buyer-cancel', anyItems: true, group: 'Post-order', title: 'Buyer cancels order', providerId: 'P1', retailer: SHARMA,
     summary: 'The retailer cancels a confirmed order (reason 053, as pre-order-service sends).',
     steps: [...placeOrder(), cancelStep()],
   },
   {
-    id: 'seller-cancel', group: 'Post-order', title: 'Seller cancels order', providerId: 'P1', retailer: SHARMA,
-    cart: [{ id: 'I1', count: 20 }],
+    id: 'seller-cancel', anyItems: true, group: 'Post-order', title: 'Seller cancels order', providerId: 'P1', retailer: SHARMA,
     summary: 'The distributor cancels a confirmed order on its own (unsolicited on_cancel, reason 005).',
     steps: [
       ...placeOrder(),
@@ -428,24 +412,62 @@ export const SCENARIOS = [
 ];
 
 // `cart` / `target` override the scenario's defaults (the playground's cart editor).
+// Any-items scenarios get a random cart once the catalogue is loaded (see randomCart).
 export function newState(scenario, { cart, target } = {}) {
-  const lines = (cart ?? scenario.cart).map((l) => ({ ...l }));
-  return {
+  const state = {
     providerId: scenario.providerId,
     retailer: { ...scenario.retailer },
-    cart: lines,
+    cart: (cart ?? scenario.cart ?? []).map((l) => ({ ...l })),
     mode: scenario.mode ?? 'normal',
-    target: target && lines.some((l) => l.id === target) ? target : lines[0]?.id,
+    anyItems: Boolean(scenario.anyItems),
+    cartRule: scenario.cartRule,
+    wantedTarget: target,
   };
+  pickTarget(state);
+  return state;
+}
+
+function pickTarget(state) {
+  const ids = state.cart.map((l) => l.id);
+  state.target = ids.includes(state.wantedTarget) ? state.wantedTarget : ids[0];
+}
+
+const randomInt = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
+const shuffled = (list) => list.map((v) => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+
+// A random cart that keeps the flow valid: two items at or above their MOQ, where the items other
+// than the affected (first) one alone meet the minimum order value - so the order still goes through
+// after the seller mode removes or halves the affected item. 'below_mov' is one item under the minimum.
+export function randomCart(state) {
+  const items = providerOf(state).items;
+  const moq = (i) => Number(i.quantity.minimum.count);
+  const price = (i) => Number(i.price.value);
+  const mov = minOrderValue(state);
+  if (state.cartRule === 'below_mov') {
+    const under = items.filter((i) => price(i) * moq(i) < mov);
+    const pick = shuffled(under.length ? under : items)[0];
+    return [{ id: pick.id, count: moq(pick) }];
+  }
+  const [a, b] = shuffled(items);
+  const lines = [a, b].map((i) => ({ id: i.id, count: randomInt(moq(i), moq(i) * 2) }));
+  const rest = price(b) * lines[1].count;
+  if (rest < mov) lines[1].count *= Math.ceil(mov / rest);
+  return lines;
 }
 
 // The catalogue a buyer would already have cached: fetched once per scenario as a preview
 // (sync mode, nothing is delivered), so order scenarios don't need a search step.
 async function ensureCatalog(state, { bap, previewSend }) {
-  if (state.catalog) return;
-  const reply = await previewSend('search', R.searchBroadcast({ bap }), { name: 'normal', items: [] });
-  state.catalog = cbBody(reply).message.catalog['bpp/providers'];
+  if (!state.catalog) {
+    const reply = await previewSend('search', R.searchBroadcast({ bap }), { name: 'normal', items: [] });
+    state.catalog = cbBody(reply).message.catalog['bpp/providers'];
+  }
+  if (state.anyItems && !state.cart.length) {
+    state.cart = randomCart(state);
+    pickTarget(state);
+  }
 }
+export { ensureCatalog };
 
 // Runs one step: builds, sends (with the scenario's seller mode), checks the ACK, absorbs, then
 // evaluates the step's expectation. Returns { request, reply, problem }; problem is null when the
@@ -473,4 +495,55 @@ export async function runScenario(scenario, { bap, bpp, send, previewSend, cart,
 
 export { PUSH_LABELS };
 export const buyerText = (step, state) => (state.catalog || !step.needsCatalog ? step.buyer(state) : '');
-export const expectText = (step, state) => (typeof step.expect === 'function' ? (state.catalog ? step.expect(state) : 'Shown once the catalogue has loaded.') : step.expect);
+export function expectText(step, state) {
+  if (typeof step.expect !== 'function') return step.expect;
+  if (!state.catalog || !state.cart.length) return 'Depends on the items your app orders.';
+  try {
+    return step.expect(state);
+  } catch {
+    return 'Depends on the items your app orders.';
+  }
+}
+
+// ---- live tracking --------------------------------------------------------------------------
+// Matches the calls a buyer app actually made (activity entries, oldest first) to a scenario's
+// steps, in order, and checks each one with the step's own expectation. Calls that are not part of
+// the flow (a catalogue /search before an order, a repeated call) are skipped.
+const entryMatches = (step, a) => (step.action === 'push'
+  ? a.kind === 'seller_action' && a.request?.event === step.event
+  : a.kind === 'request' && a.action === step.action && (step.action !== 'search' || Boolean(step.p2p) === Boolean(a.request?.context?.bpp_id)));
+
+export function trackLive(scenario, entries, { catalog, modeItems = [] }) {
+  const state = newState(scenario);
+  Object.assign(state, { catalog, modeItems, cart: [] });
+  let cursor = 0;
+  return scenario.steps.map((step) => {
+    const at = entries.findIndex((a, i) => i >= cursor && entryMatches(step, a));
+    if (at === -1) return { step, entry: null };
+    cursor = at + 1;
+    const entry = entries[at];
+    const reply = { response: entry.response, callbacks: entry.callbacks ?? [] };
+    if (step.action === 'select') {
+      state.selectRequest = entry.request;
+      if (!state.cart.length) {
+        // The first /select tells us what the app ordered; the seller mode hits the named items, else the first.
+        const order = entry.request.message?.order ?? {};
+        state.providerId = order.provider?.id ?? state.providerId;
+        state.cart = (order.items ?? []).map((i) => ({ id: i.id, count: Number(i.quantity?.count ?? 0) }));
+        state.wantedTarget = modeItems.find((id) => state.cart.some((l) => l.id === id));
+        pickTarget(state);
+      }
+    }
+    let problem = null;
+    try {
+      if (reply.response?.message?.ack?.status !== 'ACK') problem = `mock NACKed: ${JSON.stringify(reply.response?.error)}`;
+      else {
+        step.absorb?.(state, reply);
+        problem = step.check ? step.check(reply, state) : null;
+      }
+    } catch (err) {
+      problem = `could not check: ${err.message}`;
+    }
+    return { step, entry, problem, expect: expectText(step, state) };
+  });
+}

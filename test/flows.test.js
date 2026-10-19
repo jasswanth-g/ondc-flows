@@ -7,7 +7,7 @@ import { deliver } from '../lib/transport.js';
 import { authorizationHeader, signingConfig } from '../lib/signing.js';
 import { offerLines } from '../lib/offers.js';
 import { PROVIDERS } from '../lib/data.js';
-import { SCENARIOS, runScenario } from '../public/shared/scenarios.js';
+import { SCENARIOS, runScenario, trackLive } from '../public/shared/scenarios.js';
 import * as R from '../public/shared/requests.js';
 
 const cfg = {
@@ -45,6 +45,16 @@ for (const s of SCENARIOS) {
   });
 }
 
+// Any-items scenarios pick a random cart each run; every draw must still give the expected flow.
+test('any-items scenarios hold for random carts', async () => {
+  for (const sc of SCENARIOS.filter((x) => x.anyItems)) {
+    for (let i = 0; i < 15; i++) {
+      const state = await runScenario(sc, { ...env, send });
+      assert.ok(state.cart.length > 0, sc.id);
+    }
+  }
+});
+
 test('every scenario is covered by at least one step check', () => {
   for (const s of SCENARIOS) assert.ok(s.steps.every((st) => st.check), s.id);
 });
@@ -55,8 +65,10 @@ test('quotes carry no tax and no delivery charge', async () => {
   const lines = state.onConfirm.message.order.quote.breakup.filter((b) => ['tax', 'delivery'].includes(b['@ondc/org/title_type']));
   assert.ok(lines.length > 0);
   assert.ok(lines.every((b) => b.price.value === '0.00'));
-  // 20 x I1 @ 52 + 5 x I6 @ 360, nothing else added.
-  assert.equal(state.onConfirm.message.order.quote.price.value, '2840.00');
+  // Items only: the sum of the item lines (after any applied offer) is the total.
+  const q = state.onConfirm.message.order.quote;
+  const itemsAndOffers = q.breakup.filter((b) => ['item', 'offer'].includes(b['@ondc/org/title_type'])).reduce((t, b) => t + Number(b.price.value), 0);
+  assert.equal(q.price.value, itemsAndOffers.toFixed(2));
 });
 
 test('full catalogue: offers published, no retailer_info_required, pan-India serviceability', async () => {
@@ -109,7 +121,7 @@ for (const [id, cart, target] of [
 }
 
 test('without a mode the same carts go through untouched', async () => {
-  const state = await runScenario(SCENARIOS.find((x) => x.id === 'place-order-p2'), { ...env, send, cart: [{ id: 'I13', count: 10 }, { id: 'I14', count: 12 }] });
+  const state = await runScenario(SCENARIOS.find((x) => x.id === 'place-order'), { ...env, send, cart: [{ id: 'I3', count: 6 }, { id: 'I4', count: 8 }] });
   assert.equal(state.onConfirm.message.order.state, 'Accepted');
 });
 
@@ -175,4 +187,34 @@ test('async delivery POSTs signed callback with search header to bap_uri', async
 test('signing accepts a raw base64 libsodium key', () => {
   const s = signingConfig({ SIGNING_PRIVATE_KEY: crypto.randomBytes(64).toString('base64'), BPP_ID: 'x', BPP_UNIQUE_KEY_ID: 'k' });
   assert.match(authorizationHeader('{}', s), /^Signature keyId="x\|k\|ed25519"/);
+});
+
+// The live tracker reads activity entries; build them from calls a buyer app would make, with an
+// unrelated catalogue search first, and the seller mode armed (no header) as for a real app.
+test('live tracking matches a buyer app\'s real calls to the scenario steps', async () => {
+  const { setMode } = await import('../lib/modes.js');
+  const bap = { id: 'live-bap.test', uri: 'https://live-bap.test/ondc' };
+  await setMode(bap.id, { mode: 'out_of_stock', items: ['I12'] });
+  const entries = [];
+  const call = async (action, request) => {
+    const out = await handle(action, request, cfg);
+    entries.push({ kind: 'request', action, request, response: out.response, callbacks: out.callbacks.map((c) => ({ headers: c.headers, body: c.body })) });
+    return out.callbacks.at(-1).body;
+  };
+  const catalog = (await call('search', R.searchBroadcast({ bap }))).message.catalog['bpp/providers'];
+  const retailer = SCENARIOS.find((x) => x.id === 'out-of-stock').retailer;
+  const p2 = catalog.find((p) => p.id === 'P2');
+  const sel = R.select({ bap, bpp: env.bpp, catalogProvider: p2, retailer, lines: [{ id: 'I9', count: 20 }, { id: 'I12', count: 10 }] });
+  const onSelect = await call('select', sel);
+  const resel = R.select({ bap, bpp: env.bpp, catalogProvider: p2, retailer, lines: R.linesFromQuote(onSelect.message.order.quote), transactionId: sel.context.transaction_id });
+  const onSelect2 = await call('select', resel);
+  const onInit = await call('init', R.init({ bap, bpp: env.bpp, selectRequest: resel, onSelect: onSelect2, retailer }));
+  await call('confirm', R.confirm({ bap, bpp: env.bpp, onInit, onSelect: onSelect2, retailer }));
+
+  const live = trackLive(SCENARIOS.find((x) => x.id === 'out-of-stock'), entries, { catalog, modeItems: ['I12'] });
+  assert.deepEqual(live.map((l) => [l.step.name, Boolean(l.entry), l.problem]), [
+    ['select → on_select', true, null], ['re-select → on_select', true, null], ['init → on_init', true, null], ['confirm → on_confirm', true, null],
+  ]);
+  assert.match(live[0].expect, /I12 at qty 0/);
+  await setMode(bap.id, { mode: 'normal' });
 });

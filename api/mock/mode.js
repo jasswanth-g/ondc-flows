@@ -25,13 +25,13 @@ export default async function handler(req, res) {
       const bapId = new URL(req.url, 'http://x').searchParams.get('bap_id');
       if (!bapId) return send(res, 400, { error: 'bap_id is required' });
       const mode = await getMode(bapId);
-      return send(res, 200, { bap_id: bapId, mode: mode.name, items: mode.items, scenario: mode.scenario, modes: MODES });
+      return send(res, 200, { bap_id: bapId, mode: mode.name, items: mode.items, scenario: mode.scenario, at: mode.at, modes: MODES });
     }
     if (req.method === 'POST') {
       const { bap_id: bapId, mode, items, scenario } = await readJson(req);
       if (!bapId) return send(res, 400, { error: 'bap_id is required' });
       const saved = await setMode(bapId, { mode, items, scenario });
-      return send(res, 200, { bap_id: bapId, mode: saved.name, items: saved.items, scenario: saved.scenario });
+      return send(res, 200, { bap_id: bapId, mode: saved.name, items: saved.items, scenario: saved.scenario, at: saved.at });
     }
     return send(res, 405, { error: 'Use GET or POST' });
   } catch (err) {

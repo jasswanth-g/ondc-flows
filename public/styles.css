@@ -123,6 +123,15 @@ td.actions button { padding: 4px 10px; font-size: 12px; }
 button.danger { color: var(--bad); border-color: var(--bad); }
 main > .tabs { padding: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 
+/* live tracking */
+.step-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.buyer-step.next { border-left: 3px solid var(--accent); padding-left: 10px; margin-left: -13px; }
+.buyer-step.done .step-title b { color: var(--ok); }
+.pill.waiting { background: var(--warn-bg); color: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .pill.waiting { animation: none; } }
+.live-detail:not(:empty) { margin-top: 6px; }
+
 /* cart editor */
 .cart { margin-bottom: 12px; }
 .cart-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }

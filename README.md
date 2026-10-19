@@ -11,9 +11,12 @@ pre-order-service handles, every offer type in the contract, and post-order stat
 1. Open the playground (`/`) and enter the `bap_id` your app sends in `context.bap_id`.
 2. Point the app at the `bpp_uri` shown at the top (`<host>/ondc`).
 3. Pick a scenario and press **Activate for my bap_id**. The page lists what to do in the app for
-   each step, and what the mock will answer.
-4. Use the app. The **Activity** tab shows every call it made, the mock's ACK, each callback and
-   whether the app ACKed it.
+   each step and what the mock will answer, and then tracks it **live**: each step shows "waiting
+   for /select from your app…" until the call arrives, then the request, the callback, whether
+   your app ACKed it, and whether the answer matched the scenario. Order flows take **any items**:
+   the seller mode acts on whatever the app ordered (the first item, unless you name items when
+   activating). Only offer scenarios name items, because each offer qualifies specific items.
+4. The **Activity** tab shows every call from the app, also live.
 5. For post-order, the seller acts on its own: **Seller actions** in the Activity tab (Packed, Out
    for delivery, Delivered, Seller cancels) send an unsolicited `on_status` / `on_cancel` to the app
    for orders it confirmed.
@@ -144,17 +147,18 @@ customer_id, or by phone_number + PAN, and returns credit, POC, customer and sch
 
 ## Scenarios
 
-Each scenario lists the steps your app performs and what the mock answers to each. Order
-scenarios start at `/select` with the retailer already identified (the app should have the
-catalogue from a search). The simulation has a cart editor and, for a seller mode, an
-affected-item picker. `npm test` runs every scenario, and runs every mode again on other carts.
+Each scenario lists the steps your app performs and what the mock answers to each, and tracks
+them live once activated. Order scenarios start at `/select` (the app should have the catalogue
+from a search; its own searches are skipped by the tracker). The simulation uses a random cart for
+any-items flows (Shuffle for another) and the qualifying cart for offers. `npm test` runs every
+scenario, every any-items flow with 15 random carts, every mode on other carts, and the live
+tracker against a buyer app's calls.
 
 | Group | Scenario | Seller |
 |---|---|---|
 | Pre-order | Search | Full catalogue `on_search` (header `full`) |
 | | Place order (positive) | select (2 delivery options) → init (credit) → confirm, `Accepted` |
 | | Place order - tomorrow delivery | Buyer picks F2 `Immediate Delivery` |
-| | Place order - P2 (HUL) | flat150 applied |
 | | Place order - walk-in, prepaid (P3) | No customer_id, `ON-ORDER` with a payment link |
 | | Item inactive | mode `item_inactive`, then re-select |
 | | Item out of stock | mode `out_of_stock`, then re-select |
