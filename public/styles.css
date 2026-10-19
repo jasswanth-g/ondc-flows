@@ -142,7 +142,7 @@ button.play.big { padding: 9px 18px; font-size: 15px; }
 .pill.running { background: var(--surface-2); color: var(--accent); }
 .pill.running::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.buyer-step.skipped { opacity: .6; }
+
 @keyframes pulse { 50% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .pill.waiting, .pill.running::before { animation: none; } }
 .live-detail:not(:empty) { margin-top: 6px; }
@@ -218,7 +218,6 @@ button.round.stop { background: var(--bad-bg); color: var(--bad); border-color: 
 .call-card.bad { border-color: #f0b4b4; background: #fff6f6; }
 .call-card.awaiting { border-color: #f1d58a; background: #fffbef; }
 .call-card.running { border-color: #9fbfe2; background: #f3f8fe; }
-.call-card.skipped { opacity: .55; }
 .call-card.wide { width: 100%; }
 
 .inspector { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; max-height: calc(100vh - 24px); }

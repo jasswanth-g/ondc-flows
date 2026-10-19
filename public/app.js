@@ -154,7 +154,6 @@ function cardsOf(sc) {
 // The card's status from the tracked phase of its step.
 function cardStatus(card, result, isNext) {
   const ph = result?.phase ?? 'waiting';
-  if (ph === 'skipped') return ['skipped', 'skipped'];
   if (card.side === 'send') {
     if (ph === 'waiting') return isNext ? ['awaiting', 'awaiting'] : ['pending', 'pending'];
     const ok = result.entry.response?.message?.ack?.status === 'ACK';
@@ -183,7 +182,7 @@ function flowCard(sc) {
   const nextStep = running ? results.findIndex((r) => r.phase === 'waiting') : -1;
   const doneCards = cards.filter((c) => {
     const r = results[c.i];
-    return r && (r.phase === 'skipped' || (c.side === 'send' ? r.phase !== 'waiting' : r.phase === 'completed'));
+    return r && (c.side === 'send' ? r.phase !== 'waiting' : r.phase === 'completed');
   }).length;
   const pct = running ? Math.round((doneCards / cards.length) * 100) : 0;
 
@@ -270,7 +269,6 @@ function inspectorContent({ card, result, sc }) {
       card.side === 'send' ? `In your app: ${buyerText(card.step, { ...state, cart: [], modeItems: armed?.items })}` : `The mock answers: ${result?.expect ?? expectText(card.step, { ...state, cart: [] })}`,
       '',
       ...(result?.problem ? [`Unexpected: ${result.problem}`] : []),
-      ...(result?.phase === 'skipped' ? ['Skipped: your app went to the next step without this call.'] : []),
     ].join('\n');
   }
   if (!entry) {
@@ -340,7 +338,7 @@ function track(activity) {
   const results = trackLive(sc, entries, { catalog: tracked.catalog ?? [], modeItems: armed.items ?? [] });
   tracked = { ...tracked, results };
   const next = results.findIndex((r) => r.phase === 'waiting');
-  const prevDone = next > 0 && results.slice(0, next).every((r) => r.phase === 'completed' || r.phase === 'skipped');
+  const prevDone = next > 0 && results.slice(0, next).every((r) => r.phase === 'completed');
   if (next !== -1 && sc.steps[next].action === 'push' && prevDone && results.state.onConfirm && !fired.has(next)) {
     fired.add(next);
     setTimeout(() => post('/api/mock/push', R.sellerPush({ onConfirm: results.state.onConfirm, event: sc.steps[next].event }), { 'X-Mock-Deliver': 'wait' }).then(() => poll(true)), 1200);

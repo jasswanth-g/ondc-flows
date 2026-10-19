@@ -15,8 +15,8 @@ The playground (`/`) works like the ONDC Workbench's flow testing:
 2. **Flows:** each scenario is a flow card with a progress bar and **▶**. Press ▶ and use your app.
 3. Every call of the flow is a card: **YOU SEND** `search` (*awaiting* → *received*) paired with
    **MOCK** `on_search` (*on hold* → *sending…* → *sent · ACK*). Cards turn red on a NACK, an
-   undelivered callback or an answer that doesn't match the scenario. A catalogue search before an
-   order is *skipped* if the app uses its cached catalogue.
+   undelivered callback or an answer that doesn't match the scenario. Order flows start at
+   `/select`; a catalogue search your app makes on the way is simply ignored.
 4. **UNSOLICITED** seller calls (`on_status` Packed / Out for delivery / Delivered, seller
    `on_cancel`) are sent by the page itself once the step before them completes.
 5. Click any card to see its actual JSON on the right: **Request** (what your app sent, or the

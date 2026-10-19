@@ -46,13 +46,9 @@ const cartText = (s, lines) => lines.map((l) => `${l.id} ${catalogItem(s, l.id)?
 // to do in the buyer app to make that call. `expect` may be a function of state (it names the
 // affected item). build/absorb/check drive the simulation and the tests.
 
-// `optional`: a catalogue search before an order. The live tracker marks it skipped when the app
-// goes straight to /select with a cached catalogue.
-const searchStep = ({ optional = false } = {}) => ({
-  name: 'search → on_search', action: 'search', optional,
-  buyer: () => (optional
-    ? 'Open the catalogue: the app sends a broadcast /search (skipped if it uses its cached catalogue).'
-    : 'Open the catalogue: the app sends a broadcast /search.'),
+const searchStep = () => ({
+  name: 'search → on_search', action: 'search',
+  buyer: () => 'Open the catalogue: the app sends a broadcast /search.',
   expect: 'Full catalogue (header full): providers with locations, items, variant groups, offers and pan-India serviceability.',
   build: ({ bap }) => R.searchBroadcast({ bap }),
   absorb: (s, reply) => (s.catalog = cbBody(reply).message.catalog['bpp/providers']),
@@ -159,7 +155,6 @@ export const SCENARIOS = [
     id: 'place-order', anyItems: true, group: 'Pre-order', title: 'Place order (positive)', providerId: 'P1', retailer: SHARMA,
     summary: 'Order any items: select → init (pay on fulfillment, credit for a known retailer) → confirm.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'Serviceable. Two delivery options: F1 Standard Delivery (beat, P2D) and F2 Immediate Delivery (tomorrow, P1D).',
         check: (r) => all(noError(r), fail(order(r).fulfillments.length === 2, 'expected 2 delivery options')) }),
       initStep(),
@@ -170,7 +165,6 @@ export const SCENARIOS = [
     id: 'delivery-tomorrow', anyItems: true, group: 'Pre-order', title: 'Place order - tomorrow delivery', providerId: 'P1', retailer: SHARMA,
     summary: 'The buyer picks F2 (Immediate Delivery) from on_select instead of the beat day.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'F1 Standard Delivery and F2 Immediate Delivery offered.' }),
       initStep({ fulfillmentId: 'F2', expect: 'Fulfillment F2 (Immediate Delivery), TAT P1D.',
         check: (r) => all(noError(r), fail(order(r).fulfillments[0].id === 'F2' && order(r).fulfillments[0]['@ondc/org/TAT'] === 'P1D', 'expected F2 / P1D')) }),
@@ -181,7 +175,6 @@ export const SCENARIOS = [
     id: 'place-order-prepaid', anyItems: true, group: 'Pre-order', title: 'Place order - walk-in, prepaid (P3)', providerId: 'P3', retailer: WALK_IN_RETAILER,
     summary: 'Order any items and pay online (ON-ORDER): the seller returns its payment link in on_init.',
     steps: [
-      searchStep({ optional: true }),
       selectStep(),
       initStep({ paymentType: 'ON-ORDER', expect: 'payments[0].type ON-ORDER with the seller\'s payment link (uri); no credit tag.',
         check: (r) => all(noError(r), fail(order(r).payments[0].uri, 'expected a payment uri')) }),
@@ -192,7 +185,6 @@ export const SCENARIOS = [
     id: 'item-inactive', anyItems: true, group: 'Pre-order', title: 'Item inactive', providerId: 'P1', retailer: SHARMA, mode: 'item_inactive',
     summary: 'The seller disables an item that is in the cart. It tells the buyer with an incremental on_search, and returns the item at qty 0.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: (s) => `First an unsolicited incremental on_search (header inc) with ${s.target} time.label "disable", then on_select with error 40002 and ${s.target} at qty 0.`,
         check: (r, s) => {
           const inc = r.callbacks.find((c) => c.headers?.['X-ONDC-Search-Response'] === 'inc')?.body.message.catalog['bpp/providers'][0].items[0];
@@ -208,7 +200,6 @@ export const SCENARIOS = [
     id: 'out-of-stock', anyItems: true, group: 'Pre-order', title: 'Item out of stock', providerId: 'P2', retailer: LAKSHMI, mode: 'out_of_stock',
     summary: 'The seller has none of the affected item left.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: (s) => `Error 40002, message [{"item_id":"${s.target}","error":"40002"}]; ${s.target} at qty 0.`,
         check: (r, s) => fail(errorCode(r) === '40002' && itemCount(r, s.target) === 0, `expected 40002 with ${s.target} at 0`) }),
       reselectFromQuote('onSelect'),
@@ -220,7 +211,6 @@ export const SCENARIOS = [
     id: 'partial-quantity', anyItems: true, group: 'Pre-order', title: 'Partial quantity available', providerId: 'P1', retailer: SHARMA, mode: 'partial_quantity',
     summary: 'The seller can supply only half of the affected item.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: (s) => `Error 40002; ${s.target} at ${half(qtyOf(s, s.target))} of ${qtyOf(s, s.target)}.`,
         check: (r, s) => fail(errorCode(r) === '40002' && itemCount(r, s.target) === half(qtyOf(s, s.target)), `expected 40002 with ${s.target} at ${half(qtyOf(s, s.target))}`) }),
       reselectFromQuote('onSelect'),
@@ -232,7 +222,6 @@ export const SCENARIOS = [
     id: 'price-changed', anyItems: true, group: 'Pre-order', title: 'Price changed', providerId: 'P2', retailer: LAKSHMI, mode: 'price_changed',
     summary: 'The seller now charges 5% more for the affected item than the catalogue says.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: (s) => `No error; ${s.target} item.price ${(Math.round(Number(catalogItem(s, s.target).price.value) * 105) / 100).toFixed(2)} instead of ${catalogItem(s, s.target).price.value}.`,
         check: (r, s) => all(noError(r), fail(itemLine(r, s.target)?.item.price.value === (Math.round(Number(catalogItem(s, s.target).price.value) * 105) / 100).toFixed(2), `expected ${s.target} +5%`)) }),
       initStep(),
@@ -243,7 +232,6 @@ export const SCENARIOS = [
     id: 'min-order-value', anyItems: true, cartRule: 'below_mov', group: 'Pre-order', title: 'Minimum order value not met', providerId: 'P2', retailer: LAKSHMI,
     summary: 'A cart below the distributor\'s published order_value.min_value (P1 500, P2 2000, P3 1500). The buyer tops it up and re-selects.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ buyer: () => 'Add items worth less than the distributor\'s minimum order value (P1 ₹500, P2 ₹2000, P3 ₹1500) and open the cart: the app sends /select.',
         expect: 'Error 30023 with the quote still present (pre-order-service shows MOV_NOT_MET).',
         check: (r) => fail(errorCode(r) === '30023' && order(r)?.quote, 'expected 30023 with a quote - is the cart below the minimum order value?') }),
@@ -257,7 +245,6 @@ export const SCENARIOS = [
     id: 'init-qty-reduced', anyItems: true, group: 'Pre-order', title: 'Quantity reduced at init', providerId: 'P2', retailer: LAKSHMI, mode: 'init_qty_reduced',
     summary: 'Stock of the affected item halves between select and init. on_init returns the lower quantity; the buyer must select again.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'Everything available.' }),
       initStep({ expect: (s) => `No error, but ${s.target} comes back at ${half(qtyOf(s, s.target))} (pre-order-service: CART_UPDATED → re-select).`,
         check: (r, s) => all(noError(r), fail(itemCount(r, s.target) === half(qtyOf(s, s.target)), `expected ${s.target} at ${half(qtyOf(s, s.target))}`)) }),
@@ -270,7 +257,6 @@ export const SCENARIOS = [
     id: 'confirm-rejected', anyItems: true, group: 'Pre-order', title: 'Seller rejects confirm', providerId: 'P2', retailer: LAKSHMI, mode: 'confirm_rejected',
     summary: 'Select and init succeed; the seller cannot confirm the order.',
     steps: [
-      searchStep({ optional: true }),
       selectStep(),
       initStep(),
       confirmStep({ expect: 'on_confirm with error 30019 (pre-order-service marks the order Cancelled).', check: (r) => fail(errorCode(r) === '30019', 'expected 30019') }),
@@ -283,7 +269,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I1', count: 20 }],
     summary: 'discp10: 10% off Atta (max ₹200), min ₹500, auto = no. on_select lists it without applying it; the buyer selects it at init.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'discp10 listed at -104.00, not applied: quote.price 1040.00.',
         check: (r) => all(noError(r), fail(offerLine(r, 'discp10')?.price.value === '-104.00', 'expected discp10 -104.00'), fail(order(r).quote.price.value === '1040.00', `quote.price ${order(r).quote.price.value}`)) }),
       initStep({ offers: ['discp10'], expect: 'Buyer sends offers [discp10]: applied, quote.price 936.00.',
@@ -296,7 +281,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I9', count: 10 }, { id: 'I12', count: 10 }],
     summary: 'flat150: ₹150 off Tea & Coffee above ₹1000, auto + additive.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'flat150 at -150.00, applied: quote.price 3750.00.', check: (r) => all(noError(r), fail(offerLine(r, 'flat150')?.price.value === '-150.00' && order(r).quote.price.value === '3750.00', 'expected flat150 applied')) }),
       initStep({ check: (r) => all(noError(r), quoteAddsUp(r), fail(appliedOffers(r).includes('flat150'), 'flat150 not applied')) }),
       confirmStep(),
@@ -307,7 +291,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I2', count: 10 }],
     summary: 'Atta 5kg: slab1 5% for 10-19 units (max ₹500), slab2 10% for 20+ units (max ₹1000).',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: '10 units: slab1 at -122.50.', check: (r) => fail(offerLine(r, 'slab1')?.price.value === '-122.50', 'expected slab1 -122.50') }),
       selectStep({ reselect: true, lines: [{ id: 'I2', count: 20 }], expect: '20 units: slab2 at -490.00 replaces slab1.', check: (r) => fail(offerLine(r, 'slab2')?.price.value === '-490.00' && !offerLine(r, 'slab1'), 'expected slab2 only') }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('slab2'), 'slab2 not applied')) }),
@@ -319,7 +302,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I10', count: 5 }],
     summary: 'Surf Excel: slabw1 4% for 20-49 kg, slabw2 8% for 50+ kg (weight = pack size x quantity).',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: '20 kg: slabw1 at -99.00.', check: (r) => fail(offerLine(r, 'slabw1')?.price.value === '-99.00', 'expected slabw1 -99.00') }),
       selectStep({ reselect: true, lines: [{ id: 'I10', count: 13 }], expect: '52 kg: slabw2 at -514.80.', check: (r) => fail(offerLine(r, 'slabw2')?.price.value === '-514.80', 'expected slabw2 -514.80') }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('slabw2'), 'slabw2 not applied')) }),
@@ -331,7 +313,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I19', count: 6 }],
     summary: 'slabv1: 3% off Appy Fizz worth ₹5000+ (max ₹1000), auto + additive.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: '₹5040 of Appy Fizz: slabv1 at -151.20.', check: (r) => fail(offerLine(r, 'slabv1')?.price.value === '-151.20', 'expected slabv1 -151.20') }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('slabv1'), 'slabv1 not applied')) }),
       confirmStep(),
@@ -342,7 +323,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I6', count: 10 }],
     summary: 'freebie1: buy 10 Dark Fantasy, get 1 Bingo Mad Angles free.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'freebie1 line: price 0.00, item_quantity 1, offer tag item_id I7, item_count 1.',
         check: (r) => fail(tagVal(offerLine(r, 'freebie1')?.item.tags, 'offer', 'item_id') === 'I7', 'expected freebie1 with I7') }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('freebie1'), 'freebie1 not applied')) }),
@@ -354,7 +334,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I16', count: 6 }],
     summary: 'buy2get1: every 2 cases of Frooti 200ml get 1 more free.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: '6 cases: buy2get1 with 3 free (item_id I16, item_count 3, item_value 0.00).',
         check: (r) => fail(tagVal(offerLine(r, 'buy2get1')?.item.tags, 'offer', 'item_count') === '3', 'expected 3 free') }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('buy2get1'), 'buy2get1 not applied')) }),
@@ -366,7 +345,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I1', count: 20 }, { id: 'I4', count: 5 }, { id: 'I5', count: 3 }],
     summary: 'combo1: Atta (I1 or I2) + both B Natural packs (I4 and I5) → 50% off, max ₹200.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'combo1 at -200.00 (capped).', check: (r) => fail(offerLine(r, 'combo1')?.price.value === '-200.00', 'expected combo1 -200.00') }),
       initStep({ check: (r) => all(quoteAddsUp(r), fail(appliedOffers(r).includes('combo1'), 'combo1 not applied')) }),
       confirmStep(),
@@ -377,7 +355,6 @@ export const SCENARIOS = [
     cart: [{ id: 'I2', count: 20 }, { id: 'I6', count: 10 }],
     summary: 'The cart qualifies for slab2 and freebie1 (both auto, non-additive) and discp10 (opt-in, additive). Only one non-additive offer may apply.',
     steps: [
-      searchStep({ optional: true }),
       selectStep({ expect: 'All three listed. Applied: slab2 only (auto; the first non-additive) - quote.price 8010.00.',
         check: (r) => all(fail(['slab2', 'freebie1', 'discp10'].every((id) => offerLine(r, id)), 'expected slab2, freebie1 and discp10 listed'), fail(order(r).quote.price.value === '8010.00', `quote.price ${order(r).quote.price.value}`)) }),
       initStep({ offers: ['freebie1', 'discp10'], expect: 'Buyer selects freebie1 + discp10: both applied, slab2 dropped - quote.price 8300.00.',
@@ -412,7 +389,6 @@ export const SCENARIOS = [
     id: 'post-order', anyItems: true, group: 'Post-order', title: 'Post-order: status and delivery', providerId: 'P1', retailer: SHARMA,
     summary: 'After confirm: buyer /status, then the seller pushes Packed → Out-for-delivery → Order-delivered (unsolicited on_status).',
     steps: [
-      searchStep({ optional: true }),
       ...placeOrder(),
       statusStep(),
       pushStep('packed', 'seller packs → on_status', 'Unsolicited: order In-progress, fulfillment Packed.', ['In-progress', 'Packed']),
@@ -423,13 +399,12 @@ export const SCENARIOS = [
   {
     id: 'buyer-cancel', anyItems: true, group: 'Post-order', title: 'Buyer cancels order', providerId: 'P1', retailer: SHARMA,
     summary: 'The retailer cancels a confirmed order (reason 053, as pre-order-service sends).',
-    steps: [searchStep({ optional: true }), ...placeOrder(), cancelStep()],
+    steps: [...placeOrder(), cancelStep()],
   },
   {
     id: 'seller-cancel', anyItems: true, group: 'Post-order', title: 'Seller cancels order', providerId: 'P1', retailer: SHARMA,
     summary: 'The distributor cancels a confirmed order on its own (unsolicited on_cancel, reason 005).',
     steps: [
-      searchStep({ optional: true }),
       ...placeOrder(),
       pushStep('seller_cancel', 'seller cancels → on_cancel', 'Unsolicited: order Cancelled, reason 005 - pre-order-service records it as cancelled by the SELLER.', ['Cancelled', 'Cancelled']),
     ],
@@ -542,21 +517,14 @@ const entryMatches = (step, a) => (step.action === 'push'
 //   waiting   - the call has not arrived
 //   running   - the app's call arrived; the mock is still delivering the callback(s)
 //   completed - every callback was delivered; `problem` says whether the answer matched
-//   skipped   - an optional step (catalogue search) the app did not make before the next step
 export function trackLive(scenario, entries, { catalog, modeItems = [] }) {
   const state = newState(scenario);
   Object.assign(state, { catalog, modeItems, cart: [] });
   const steps = scenario.steps;
   const nextMatch = (step, from) => entries.findIndex((a, i) => i >= from && entryMatches(step, a));
   let cursor = 0;
-  const results = steps.map((step, k) => {
-    let at = nextMatch(step, cursor);
-    if (step.optional) {
-      // Only a call made before the next required step counts; otherwise the app skipped it.
-      const following = steps.slice(k + 1).find((x) => !x.optional);
-      const nextAt = following ? nextMatch(following, cursor) : -1;
-      if (nextAt !== -1 && (at === -1 || at > nextAt)) return { step, phase: 'skipped', entry: null, expect: expectText(step, state) };
-    }
+  const results = steps.map((step) => {
+    const at = nextMatch(step, cursor);
     if (at === -1) return { step, phase: 'waiting', entry: null, expect: expectText(step, state) };
     cursor = at + 1;
     const entry = entries[at];

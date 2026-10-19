@@ -212,19 +212,15 @@ test('live tracking matches a buyer app\'s real calls to the scenario steps', as
   await call('confirm', R.confirm({ bap, bpp: env.bpp, onInit, onSelect: onSelect2, retailer }));
 
   const sc = SCENARIOS.find((x) => x.id === 'out-of-stock');
+  // The catalogue search the app made first is not part of the flow and is ignored.
   const live = trackLive(sc, entries, { catalog, modeItems: ['I12'] });
   assert.deepEqual(live.map((l) => [l.step.name, l.phase, l.problem]), [
-    ['search → on_search', 'completed', null], ['select → on_select', 'completed', null], ['re-select → on_select', 'completed', null],
+    ['select → on_select', 'completed', null], ['re-select → on_select', 'completed', null],
     ['init → on_init', 'completed', null], ['confirm → on_confirm', 'completed', null],
   ]);
-  assert.match(live[1].expect, /I12 at qty 0/);
-
-  // An app with a cached catalogue goes straight to /select: the search is skipped, not awaited.
-  const noSearch = trackLive(sc, entries.slice(1), { catalog, modeItems: ['I12'] });
-  assert.equal(noSearch[0].phase, 'skipped');
-  assert.equal(noSearch[1].phase, 'completed');
+  assert.match(live[0].expect, /I12 at qty 0/);
   // A call still delivering its callback is running; the steps after it are waiting.
   const inFlight = trackLive(sc, [entries[0], { ...entries[1], status: 'running' }], { catalog, modeItems: ['I12'] });
-  assert.deepEqual(inFlight.map((l) => l.phase), ['completed', 'running', 'waiting', 'waiting', 'waiting']);
+  assert.deepEqual(inFlight.map((l) => l.phase), ['running', 'waiting', 'waiting', 'waiting']);
   await setMode(bap.id, { mode: 'normal' });
 });
