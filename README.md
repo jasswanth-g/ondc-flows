@@ -78,7 +78,7 @@ Mock-only endpoints (not ONDC):
 - `GET /api/mock/mode?bap_id=…`, `POST /api/mock/mode { bap_id, mode, items?, scenario? }`: the
   seller mode for a buyer app (below). It lasts 24h; set `normal` to switch it off.
 - `GET /api/mock/activity?bap_id=…`: the calls from that buyer app (last 50, with callbacks and the
-  app's answers) and the orders it confirmed. Simulations are not recorded.
+  app's answers) and the orders it confirmed. Sync-mode (`X-Mock-Sync`) calls are not recorded.
 
 ## Seller modes
 
@@ -97,7 +97,7 @@ items the buyer actually ordered: the ones named for the mode, else the first it
 
 - **Your buyer app:** activating a scenario arms its mode for the app's `bap_id`
   (`POST /api/mock/mode`); every call from that `bap_id` then gets it, on whatever items it orders.
-- **Simulation / curl:** send the mode on the request as `X-Mock-Mode`, with `X-Mock-Mode-Items`
+- **curl / tests:** send the mode on the request as `X-Mock-Mode`, with `X-Mock-Mode-Items`
   for the affected items. The header wins over the armed mode.
 - **A mode acts once per transaction and is remembered for it.** The re-select / re-init that
   follows sees the same seller state, so an item stays out of stock and a halved quantity is not
