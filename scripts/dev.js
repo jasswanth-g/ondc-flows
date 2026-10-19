@@ -10,6 +10,7 @@ import img from '../api/img.js';
 import push from '../api/mock/push.js';
 import mode from '../api/mock/mode.js';
 import activity from '../api/mock/activity.js';
+import health from '../api/mock/health.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const port = Number(process.env.PORT ?? 3000);
@@ -46,6 +47,7 @@ http
       if (pathname === '/api/mock/push') return await push(req, res);
       if (pathname === '/api/mock/mode') return await mode(req, res);
       if (pathname === '/api/mock/activity') return await activity(req, res);
+      if (pathname === '/api/mock/health') return await health(req, res);
       const m = pathname.match(/^\/img\/(.+)$/);
       if (m) {
         req.url = `/api/img?name=${m[1]}`;

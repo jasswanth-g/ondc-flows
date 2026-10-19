@@ -49,6 +49,7 @@ const MODE_LABELS = {
   price_changed: 'Price changed', init_qty_reduced: 'Quantity reduced at init', confirm_rejected: 'Seller rejects confirm',
 };
 let armed = null; // { mode, items, scenario, at } running for bapId()
+let health = null; // { store, env, ok, error?, vercel } from /api/mock/health
 const runningScenario = () => (armed?.scenario ? SCENARIOS.find((x) => x.id === armed.scenario) : null);
 
 function infoChips() {
@@ -57,15 +58,34 @@ function infoChips() {
   $('#infoChips').replaceChildren(
     chip('Subscriber type', 'BPP (mock seller)'), chip('Domain', 'ONDC:RETeB2B'), chip('Version', '1.2.5'), chip('City', 'std:080'),
     chip('Active flow', sc ? sc.title : 'N/A'),
+    ...(health ? [el('span', { class: `chip-kv ${health.store === 'postgres' && health.ok ? '' : 'warn'}` }, el('span', {}, 'Storage:'),
+      el('b', {}, health.store === 'postgres' ? (health.ok ? `Postgres (${health.env})` : `Postgres error: ${health.error}`) : 'memory only'))] : []),
     ...(sc && armed.mode !== 'normal' ? [chip('Seller mode', `${MODE_LABELS[armed.mode]}${armed.items?.length ? ` (${armed.items.join(', ')})` : ''}`)] : []),
   );
+}
+
+// On Vercel each API route is its own function: without a shared store the call logged by /ondc/*
+// is invisible to /api/mock/activity, so nothing would ever update live. Say so plainly.
+async function loadHealth() {
+  try {
+    health = await fetch('/api/mock/health', { cache: 'no-store' }).then((r) => r.json());
+  } catch { health = null; }
+  const broken = health && health.vercel && (health.store !== 'postgres' || !health.ok);
+  $('#storageWarning')?.remove();
+  if (broken) {
+    $('main').prepend(el('section', { id: 'storageWarning', class: 'card banner bad' },
+      el('b', {}, health.store === 'postgres' ? 'The database is not reachable: ' : 'This deployment has no database, so calls cannot be tracked live. '),
+      health.store === 'postgres' ? health.error : ['In Vercel open the project → Settings → Environment Variables, make ', el('code', {}, 'POSTGRES_URL'),
+        ' (from the Supabase integration) available to the Production environment, then redeploy.']));
+  }
+  infoChips();
 }
 
 function refreshTarget() {
   store.set('bapId', bapId());
   bapIdInput.classList.toggle('needs', !bapId());
   $('#targetHint').replaceChildren(...(bapId()
-    ? ['Callbacks go to the ', el('code', {}, 'bap_uri'), ' your app sends in each request, at ', el('code', {}, '<bap_uri>/on_<action>'), '. Press ▶ on a flow, then use your app.']
+    ? ['Callbacks go to the ', el('code', {}, 'bap_uri'), ' your app sends in each request, at ', el('code', {}, '<bap_uri>/on_<action>'), '. Press ▶ on a flow first, then use your app: calls made before ▶ are not part of the flow.']
     : [el('b', {}, 'Enter your app\'s bap_uri (or bap_id) to start a flow.')]));
   for (const b of document.querySelectorAll('[data-needs-bap]')) {
     b.disabled = !bapId();
@@ -519,6 +539,7 @@ async function loadCatalogue() {
 
 showTab(['flows', 'activity', 'catalogue', 'retailers'].includes(store.get('tab', '')) ? store.get('tab', '') : 'flows');
 getCatalog().then((c) => (tracked.catalog = c));
+loadHealth();
 loadArmed();
 loadCallers();
 setInterval(loadCallers, 10000);

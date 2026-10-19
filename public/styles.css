@@ -241,3 +241,7 @@ button.tiny { padding: 2px 8px; font-size: 12px; margin-left: auto; }
   .chev { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .status.awaiting, .status.running::before { animation: none; } }
+
+.chip-kv.warn { background: var(--bad-bg); color: var(--bad); }
+.banner { margin-bottom: 16px; font-size: 14px; }
+.banner.bad { border-color: var(--bad); background: var(--bad-bg); color: var(--text); }
