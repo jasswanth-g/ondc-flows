@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>eB2B Mock Seller</title>
-  <meta name="description" content="Mock ONDC eB2B (DigiDukaan) Seller NP for buyer-app developers: your app calls it, it answers per the scenario you activate.">
+  <meta name="description" content="Mock ONDC eB2B (DigiDukaan) Seller NP: your buyer app sends the calls, the mock answers, every call is tracked live per flow.">
   <link rel="icon" href="/img/seller.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -13,41 +13,63 @@
     <div class="wrap">
       <div class="brand">
         <h1>eB2B Mock Seller NP</h1>
-        <p>ONDC:RETeB2B · core 1.2.5 · your buyer app calls the mock; the mock answers per the scenario you activate</p>
-      </div>
-      <div class="endpoint">
-        <span class="label">bpp_uri</span>
-        <code id="bppUri"></code>
-        <button class="ghost" data-copy="#bppUri" type="button">Copy</button>
+        <p>ONDC:RETeB2B · core 1.2.5 · Seller (BPP) mock for buyer-app testing</p>
       </div>
     </div>
   </header>
 
   <main class="wrap">
-    <section class="card target">
-      <label>Your buyer app - its bap_id or bap_uri <input id="bapId" placeholder="e.g. ondc.test.bms.qwipo.com or https://ondc.test.bms.qwipo.com/api/v1/retail_eb2b_buyer" spellcheck="false"></label>
+    <section class="card info">
+      <div class="info-head">
+        <h2>Info</h2>
+        <span class="muted" id="liveState"></span>
+      </div>
+      <div class="chips" id="infoChips"></div>
+    </section>
+
+    <section class="card endpoints">
+      <h2>Endpoints</h2>
+      <div class="endpoint-grid">
+        <div>
+          <span class="label">Send your calls to</span>
+          <div class="endpoint-box"><code id="sendTo"></code><button class="ghost" data-copy="#sendTo" type="button">Copy</button></div>
+        </div>
+        <div>
+          <label class="label" for="bapId">You will receive calls at (your bap_uri, or bap_id)</label>
+          <input id="bapId" placeholder="https://ondc.test.bms.qwipo.com/api/v1/retail_eb2b_buyer" spellcheck="false">
+          <div class="callers" id="callers"></div>
+        </div>
+      </div>
       <p class="hint" id="targetHint"></p>
-      <div class="callers" id="callers"></div>
     </section>
 
     <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="scenarios" aria-selected="true">Scenarios</button>
-      <button role="tab" data-tab="activity">Activity <span class="count" id="activityCount"></span></button>
+      <button role="tab" data-tab="flows" aria-selected="true">Flows</button>
+      <button role="tab" data-tab="activity">All calls <span class="count" id="activityCount"></span></button>
       <button role="tab" data-tab="catalogue">Catalogue</button>
       <button role="tab" data-tab="retailers">Retailers</button>
     </nav>
 
-    <section id="tab-scenarios" class="tab">
-      <div class="split">
-        <aside id="scenarioList" class="scenario-list"></aside>
-        <div id="scenarioRun"></div>
+    <section id="tab-flows" class="tab">
+      <div class="flows-layout">
+        <div id="flowList" class="flow-list"></div>
+        <aside class="inspector card">
+          <div class="inspector-title" id="inspTitle">Select a call</div>
+          <div class="insp-tabs" role="tablist">
+            <button role="tab" data-insp="request" aria-selected="true">Request</button>
+            <button role="tab" data-insp="response">Response</button>
+            <button role="tab" data-insp="guide">Guide</button>
+          </div>
+          <input id="inspSearch" class="insp-search" placeholder="Search" spellcheck="false">
+          <pre id="inspBody" class="insp-body">{}</pre>
+        </aside>
       </div>
     </section>
 
     <section id="tab-activity" class="tab" hidden>
       <div id="orders"></div>
       <div class="activity-head">
-        <h2>Calls from your buyer app</h2>
+        <h2>Every call from your buyer app</h2>
         <span class="muted" id="activityState"></span>
       </div>
       <div id="activity" class="out"></div>

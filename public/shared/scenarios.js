@@ -125,8 +125,8 @@ const statusStep = () => ({
 
 const PUSH_LABELS = { packed: 'Packed', out_for_delivery: 'Out for delivery', delivered: 'Delivered', seller_cancel: 'Seller cancels' };
 const pushStep = (event, name, expect, [orderState, fulfillmentState]) => ({
-  name, action: 'push', expect, event,
-  buyer: () => `Seller action - nothing to do in the app: in the Activity tab press "${PUSH_LABELS[event]}" on the order. The app receives it.`,
+  name, action: 'push', expect, event, callback: event === 'seller_cancel' ? 'on_cancel' : 'on_status',
+  buyer: () => `Nothing to do in the app: the seller sends this on its own (${PUSH_LABELS[event]}) once the previous step completes. The app receives it.`,
   build: (env, s) => R.sellerPush({ onConfirm: s.onConfirm, event }),
   check: (reply) => fail(order(reply)?.state === orderState && order(reply)?.fulfillments[0].state.descriptor.code === fulfillmentState,
     `expected ${orderState} / ${fulfillmentState}, got ${order(reply)?.state} / ${order(reply)?.fulfillments?.[0]?.state?.descriptor?.code}`),
@@ -549,7 +549,7 @@ export function trackLive(scenario, entries, { catalog, modeItems = [] }) {
   const steps = scenario.steps;
   const nextMatch = (step, from) => entries.findIndex((a, i) => i >= from && entryMatches(step, a));
   let cursor = 0;
-  return steps.map((step, k) => {
+  const results = steps.map((step, k) => {
     let at = nextMatch(step, cursor);
     if (step.optional) {
       // Only a call made before the next required step counts; otherwise the app skipped it.
@@ -585,4 +585,7 @@ export function trackLive(scenario, entries, { catalog, modeItems = [] }) {
     const phase = entry.status === 'running' ? 'running' : 'completed';
     return { step, phase, entry, problem, expect: expectText(step, state) };
   });
+  // The tracked state (e.g. onConfirm, for the seller actions that follow the order).
+  results.state = state;
+  return results;
 }

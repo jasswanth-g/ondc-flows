@@ -8,29 +8,25 @@ pre-order-service handles, every offer type in the contract, and post-order stat
 
 ## How to test your buyer app
 
-1. Open the playground (`/`) and enter your app's `bap_id` **or** `bap_uri` (either works; apps
-   that called the mock recently are listed as one-click chips).
-2. Point the app at the `bpp_uri` shown at the top (`<host>/ondc`).
-3. Press **▶** on a scenario. The page lists what to do in the app for each step and what the mock
-   will answer, then tracks it **live**: each step goes *waiting* → *running* (your app's call
-   arrived, the callback is being sent) → *completed* (with whether your app ACKed it and whether the
-   answer matched the scenario). A catalogue `/search` before an order is tracked too, and shown as
-   *skipped* if the app goes straight to `/select`. **■ Stop** puts the seller back to normal. Order flows take **any items**:
-   the seller mode acts on whatever the app ordered (the first item, unless you name items when
-   activating). Only offer scenarios name items, because each offer qualifies specific items.
-4. The **Activity** tab shows every call from the app, also live.
-5. For post-order, the seller acts on its own: **Seller actions** in the Activity tab (Packed, Out
-   for delivery, Delivered, Seller cancels) send an unsolicited `on_status` / `on_cancel` to the app
-   for orders it confirmed.
+The playground (`/`) works like the ONDC Workbench's flow testing:
 
-**Simulate** (in each scenario) runs the steps in sync mode, showing the exact request the app
-should send and the callback it gets. It sends nothing to the app.
+1. **Endpoints:** point your app at *Send your calls to* (`<host>/ondc/<action>`) and enter where
+   you receive calls: your `bap_uri` (or `bap_id`). Apps that called recently are one-click chips.
+2. **Flows:** each scenario is a flow card with a progress bar and **▶**. Press ▶ and use your app.
+3. Every call of the flow is a card: **YOU SEND** `search` (*awaiting* → *received*) paired with
+   **MOCK** `on_search` (*on hold* → *sending…* → *sent · ACK*). Cards turn red on a NACK, an
+   undelivered callback or an answer that doesn't match the scenario. A catalogue search before an
+   order is *skipped* if the app uses its cached catalogue.
+4. **UNSOLICITED** seller calls (`on_status` Packed / Out for delivery / Delivered, seller
+   `on_cancel`) are sent by the page itself once the step before them completes.
+5. Click any card to see its actual JSON on the right: **Request** (what your app sent, or the
+   callback the mock sent), **Response** (the mock's ACK, or your app's reply to the callback),
+   **Guide** (what to do in the app and what the mock answers). **Follow live** tracks the latest.
+6. **All calls** lists every call from your app; **■** stops the flow (seller back to normal).
 
-- Domain `ONDC:RETeB2B`, core version `1.2.5`, city `std:080`
-- 3 providers, 20 items, variant groups, timings, `brand_images`, offers
-- Serviceability is pan-India for every location (`type 12`, `val IND`, `unit country`)
-- No `retailer_info_required` in the catalogue: every catalogue is open and P2P is optional
-- No tax and no delivery charge: those quote lines are sent at `0.00`
+Order flows take **any items**: the seller mode acts on whatever the app ordered (the first item,
+or the items given to `/api/mock/mode`). Only offer flows name items, because each offer qualifies
+specific items.
 
 ## Run locally
 
@@ -149,12 +145,9 @@ customer_id, or by phone_number + PAN, and returns credit, POC, customer and sch
 
 ## Scenarios
 
-Each scenario lists the steps your app performs and what the mock answers to each, and tracks
-them live once activated. Order scenarios start at `/select` (the app should have the catalogue
-from a search; its own searches are skipped by the tracker). The simulation uses a random cart for
-any-items flows (Shuffle for another) and the qualifying cart for offers. `npm test` runs every
-scenario, every any-items flow with 15 random carts, every mode on other carts, and the live
-tracker against a buyer app's calls.
+Each flow lists the calls your app makes and what the mock answers to each, tracked live once
+started. `npm test` runs every flow, every any-items flow with 15 random carts, every mode on other
+carts, and the live tracker against a buyer app's calls.
 
 | Group | Scenario | Seller |
 |---|---|---|
