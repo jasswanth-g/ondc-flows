@@ -1,4 +1,4 @@
-import { SCENARIOS, newState, runStep } from './shared/scenarios.js';
+import { SCENARIOS, newState, runStep, expectText } from './shared/scenarios.js';
 import { RETAILERS, NEW_RETAILER, WALK_IN_RETAILER } from './shared/retailers.js';
 import * as R from './shared/requests.js';
 
@@ -48,18 +48,61 @@ function refreshTarget() {
     ? ['▶ POSTs each callback to ', el('code', {}, `${t.uri}/on_<action>`), ' as ', el('code', {}, t.id), ' and shows what your buyer app answered.']
     : ['Enter your buyer app\'s bap_uri to enable ▶. Without it you can still Preview every callback.']));
   for (const b of document.querySelectorAll('[data-needs-target]')) b.disabled = !t || b.dataset.busy === '1' || Boolean(b.closest('.locked'));
+  armBtn.disabled = !t;
 }
 bapUriInput.oninput = refreshTarget;
 bapIdInput.oninput = refreshTarget;
 
 const env = () => ({ bap: target() ?? R.BAP, bpp: BPP });
 
+// ---- seller mode for a real buyer app -------------------------------------------------------
+// A buyer app calling the mock directly sends no X-Mock-Mode, so the mode is armed for its bap_id.
+const MODE_LABELS = {
+  normal: 'Normal', item_inactive: 'Item inactive', out_of_stock: 'Out of stock', partial_quantity: 'Partial quantity',
+  price_changed: 'Price changed', init_qty_reduced: 'Quantity reduced at init', confirm_rejected: 'Seller rejects confirm',
+};
+const modeSelect = el('select', { id: 'armMode' }, Object.entries(MODE_LABELS).map(([v, l]) => el('option', { value: v }, l)));
+const modeItems = el('input', { id: 'armItems', placeholder: 'affected item ids, e.g. I1,I2 (default: first in cart)', spellcheck: 'false' });
+const modeStatus = el('span', { class: 'pill' }, '');
+const armBtn = el('button', { class: 'ghost', type: 'button' }, 'Arm for my bap_id');
+armBtn.onclick = async () => {
+  const t = target();
+  if (!t) return;
+  const res = await fetch('/api/mock/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bap_id: t.id, mode: modeSelect.value, items: modeItems.value }) });
+  showMode(await res.json());
+};
+function showMode(m) {
+  if (m.error) return (modeStatus.textContent = m.error), (modeStatus.className = 'pill bad');
+  modeStatus.textContent = `armed for ${m.bap_id}: ${MODE_LABELS[m.mode] ?? m.mode}${m.items?.length ? ` (${m.items.join(', ')})` : ''}`;
+  modeStatus.className = `pill ${m.mode === 'normal' ? '' : 'cb'}`;
+}
+async function loadMode() {
+  const t = target();
+  if (!t) return void (modeStatus.textContent = '');
+  const m = await (await fetch(`/api/mock/mode?bap_id=${encodeURIComponent(t.id)}`)).json();
+  modeSelect.value = m.mode ?? 'normal';
+  modeItems.value = (m.items ?? []).join(',');
+  showMode(m);
+}
+$('.target').append(el('div', { class: 'arm' },
+  el('label', {}, 'Seller mode when your buyer app calls the mock', modeSelect), el('label', { class: 'grow' }, 'Affected items', modeItems), armBtn, modeStatus));
+bapIdInput.addEventListener('change', loadMode);
+bapUriInput.addEventListener('change', loadMode);
+loadMode();
+
 // ---- transport ------------------------------------------------------------------------------
 // play: the mock delivers the callbacks to bap_uri and waits for the buyer app's reply.
 // preview: callbacks are only returned, nothing is POSTed.
 // 'push' is the mock seller acting on its own (fulfillment updates, seller cancel), not an ONDC call.
-async function send(action, body, { play }) {
-  const headers = { 'Content-Type': 'application/json', [play ? 'X-Mock-Deliver' : 'X-Mock-Sync']: play ? 'wait' : 'true' };
+// The scenario's seller mode always travels as X-Mock-Mode, so a mode armed for the bap_id
+// (for a real buyer app) never leaks into playground runs.
+async function send(action, body, { play }, mode = { name: 'normal', items: [] }) {
+  const headers = {
+    'Content-Type': 'application/json',
+    [play ? 'X-Mock-Deliver' : 'X-Mock-Sync']: play ? 'wait' : 'true',
+    'X-Mock-Mode': mode.name,
+    ...(mode.items?.length ? { 'X-Mock-Mode-Items': mode.items.join(',') } : {}),
+  };
   const url = action === 'push' ? '/api/mock/push' : `/ondc/${action}`;
   const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   return res.json();
@@ -135,10 +178,50 @@ function busy(btn, on) {
 
 const label = (step) => (step.action === 'push' ? 'seller push (mock)' : `/${step.action} → /on_${step.action}`);
 
-function openScenario(sc) {
+let catalogPromise;
+const getCatalog = () => (catalogPromise ??= send('search', R.searchBroadcast(env()), { play: false }).then((r) => r.callbacks[0].body.message.catalog['bpp/providers']));
+
+// Cart and affected item chosen in the editor, per scenario.
+const overrides = {};
+
+function cartEditor(sc, state, provider) {
+  const rows = el('div', { class: 'cart-rows' });
+  const itemOptions = (selected) => provider.items.map((i) => el('option', { value: i.id, ...(i.id === selected ? { selected: '' } : {}) }, `${i.id} · ${i.descriptor.name} · ₹${i.price.value}`));
+  const addRow = (line) => {
+    const pick = el('select', {}, itemOptions(line.id));
+    const qty = el('input', { type: 'number', min: '1', value: String(line.count), class: 'qty' });
+    const row = el('div', { class: 'cart-row' }, pick, qty, el('button', { class: 'ghost', type: 'button', onclick: () => row.remove() }, '✕'));
+    rows.append(row);
+  };
+  state.cart.forEach(addRow);
+  const affected = sc.mode ? el('select', {}, state.cart.map((l) => el('option', { value: l.id, ...(l.id === state.target ? { selected: '' } : {}) }, l.id))) : null;
+  const apply = () => {
+    const cart = [...rows.children].map((r) => ({ id: r.querySelector('select').value, count: Number(r.querySelector('input').value) })).filter((l) => l.count > 0);
+    const target = affected?.value && cart.some((l) => l.id === affected.value) ? affected.value : cart[0]?.id;
+    overrides[sc.id] = { cart, target };
+    openScenario(sc);
+  };
+  return el('div', { class: 'card cart' },
+    el('div', { class: 'cart-head' }, el('b', {}, `Cart · ${provider.id} ${provider.descriptor.short_desc}`),
+      sc.mode ? el('span', { class: 'pill cb' }, `seller mode: ${MODE_LABELS[sc.mode]}`) : null),
+    rows,
+    el('div', { class: 'row' },
+      el('button', { class: 'ghost', type: 'button', onclick: () => addRow({ id: provider.items[0].id, count: Number(provider.items[0].quantity.minimum.count) }) }, '+ Add item'),
+      affected ? el('label', { class: 'inline' }, 'Affected item ', affected) : null,
+      el('button', { type: 'button', onclick: apply }, 'Apply'),
+      el('button', { class: 'ghost', type: 'button', onclick: () => { delete overrides[sc.id]; openScenario(sc); } }, 'Default cart')),
+    el('p', { class: 'hint' }, sc.mode
+      ? 'The seller mode acts on the affected item, whatever you put in the cart. Re-open the dropdown after Apply to pick among the new items.'
+      : sc.group === 'Offers' ? 'Offers name their items in the catalogue: the expected amounts assume the default cart.' : 'Change items or quantities, then Apply.'));
+}
+
+async function openScenario(sc) {
   store.set('scenario', sc.id);
   for (const b of document.querySelectorAll('.scenario-item')) b.classList.toggle('current', b.dataset.id === sc.id);
-  const state = newState(sc);
+  const state = newState(sc, overrides[sc.id]);
+  state.catalog = await getCatalog();
+  const provider = state.catalog.find((p) => p.id === sc.providerId);
+  const mode = () => ({ name: state.mode, items: state.target ? [state.target] : [] });
   let done = 0;
   const rows = sc.steps.map((step, i) => {
     const out = el('div', { class: 'out step-out' });
@@ -147,7 +230,7 @@ function openScenario(sc) {
     const previewBtn = el('button', { class: 'ghost', type: 'button' }, 'Preview');
     const row = el('div', { class: 'step' },
       el('div', { class: 'step-head' }, el('span', { class: 'step-no' }, String(i + 1)), el('b', {}, step.name), el('code', {}, label(step)), status, el('span', { class: 'spacer' }), previewBtn, playBtn),
-      el('p', { class: 'step-expect' }, 'Expected: ', step.expect),
+      el('p', { class: 'step-expect' }, 'Expected: ', expectText(step, state)),
       out);
     const go = async (play) => {
       busy(playBtn, true);
@@ -157,7 +240,7 @@ function openScenario(sc) {
       out.replaceChildren();
       let ok = false;
       try {
-        const { request, reply, problem } = await runStep(step, state, { ...env(), send: (a, b) => send(a, b, { play }), previewSend: (a, b) => send(a, b, { play: false }) });
+        const { request, reply, problem } = await runStep(step, state, { ...env(), send: (a, b) => send(a, b, { play }, mode()), previewSend: (a, b) => send(a, b, { play: false }) });
         renderReply(out, reply, { request, action: step.action });
         const delivered = !play || deliveriesOk(reply);
         ok = !problem && delivered;
@@ -198,6 +281,7 @@ function openScenario(sc) {
     el('div', { class: 'run-head' },
       el('div', {}, el('span', { class: 'pill' }, sc.group), el('h2', {}, sc.title), el('p', { class: 'muted' }, sc.summary)),
       el('div', { class: 'row' }, reset, previewAll, playAll)),
+    sc.cart.length ? cartEditor(sc, state, provider) : null,
     ...rows.map((r) => r.row),
   );
   refreshSteps();
@@ -234,11 +318,10 @@ let catalogueLoaded = false;
 async function loadCatalogue() {
   if (catalogueLoaded) return;
   catalogueLoaded = true;
-  const reply = await send('search', R.searchBroadcast(env()), { play: false });
-  const providers = reply.callbacks[0].body.message.catalog['bpp/providers'];
+  const providers = await getCatalog();
   const box = $('#catalogue');
   for (const p of providers) {
-    const variants = p.tags.filter((t) => t.code === 'retailer_info_required').map((t) => t.list.find((e) => e.code === 'type').value);
+    const svc = p.tags.filter((t) => t.code === 'serviceability').map((t) => t.list.find((e) => e.code === 'unit').value);
     const minOrder = p.tags.find((t) => t.code === 'order_value').list[0].value;
     const rows = p.items.map((i) => el('tr', {},
       el('td', {}, el('img', { class: 'thumb', src: i.descriptor.symbol, alt: '' })),
@@ -255,7 +338,7 @@ async function loadCatalogue() {
       el('header', {},
         el('h3', {}, `${p.id} · ${p.descriptor.short_desc} × ${p.descriptor.name}`),
         el('span', { class: 'muted' }, `${p.descriptor.code} · locations ${p.locations.map((l) => `${l.id} ${l.address.locality}`).join(', ')} · min order ₹${minOrder}`),
-        el('span', { class: 'pill' }, variants.length ? `retailer_info_required: ${variants.join(', ')}` : 'no retailer_info_required'),
+        el('span', { class: 'pill' }, `serviceability: ${[...new Set(svc)].join(', ')} (pan-India)`),
       ),
       el('div', { class: 'table-wrap' }, el('table', {},
         el('thead', {}, el('tr', {}, ...['', 'id', 'name', 'variant', 'category', 'location', 'price', 'MRP', 'MOQ – max'].map((h) => el('th', {}, h)))),

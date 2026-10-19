@@ -10,7 +10,7 @@
       "source": "/(ondc|api)/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, X-Mock-Sync, X-Mock-Deliver" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, X-Mock-Sync, X-Mock-Deliver, X-Mock-Mode, X-Mock-Mode-Items" },
         { "key": "Access-Control-Expose-Headers", "value": "X-ONDC-Search-Response" }
       ]
     }

@@ -22,9 +22,11 @@ const cfg = {
   signing: null,
 };
 const env = { bap: R.BAP, bpp: { id: cfg.bppId, uri: cfg.bppUri } };
-const send = async (action, body) => {
-  const out = action === 'push' ? await handlePush(body, cfg) : await handle(action, body, cfg);
-  return { response: out.response, callbacks: out.callbacks.map((c) => ({ headers: c.headers, body: c.body })) };
+// `mode` plays the role of the X-Mock-Mode / X-Mock-Mode-Items headers.
+const send = async (action, body, mode) => {
+  const c = { ...cfg, mode: mode ?? null };
+  const out = action === 'push' ? await handlePush(body, c) : await handle(action, body, c);
+  return { response: out.response, callbacks: out.callbacks.map((cb) => ({ headers: cb.headers, body: cb.body })) };
 };
 
 // Every scenario runs end to end; each step's own expectation (step.check) must hold.
@@ -57,26 +59,71 @@ test('quotes carry no tax and no delivery charge', async () => {
   assert.equal(state.onConfirm.message.order.quote.price.value, '2840.00');
 });
 
-test('broadcast: 3 providers, one per visibility rule, offers published', async () => {
+test('full catalogue: offers published, no retailer_info_required, pan-India serviceability', async () => {
   const { callbacks: [cb] } = await send('search', R.searchBroadcast(env));
   const providers = cb.body.message.catalog['bpp/providers'];
   assert.deepEqual(providers.map((p) => [p.id, p.items.length]), [['P1', 8], ['P2', 7], ['P3', 5]]);
-  const variants = (p) => p.tags.filter((t) => t.code === 'retailer_info_required').map((t) => t.list.find((e) => e.code === 'type').value);
-  assert.deepEqual(providers.map(variants), [['new', 'existing', 'existing'], ['existing', 'existing'], []]);
   const types = new Set(providers.flatMap((p) => p.offers.map((o) => o.descriptor.code)));
   assert.deepEqual([...types].sort(), ['buyXgetY', 'combo', 'discount', 'freebie', 'slab']);
-  assert.equal(providers[0].fulfillments.length, 2);
+  for (const p of providers) {
+    assert.ok(!p.tags.some((t) => t.code === 'retailer_info_required'), `${p.id} publishes retailer_info_required`);
+    const svc = p.tags.filter((t) => t.code === 'serviceability');
+    assert.equal(svc.length, p.locations.length);
+    for (const t of svc) assert.deepEqual(['type', 'val', 'unit'].map((k) => t.list.find((e) => e.code === k).value), ['12', 'IND', 'country']);
+  }
 });
 
-test('offer rules: opt-in needs choosing, non-additive offers are exclusive', () => {
+test('offers: /select applies only auto offers; /init applies exactly the valid buyer selection', () => {
   const p1 = PROVIDERS[0];
   const line = (id, count) => ({ item: p1.items.find((i) => i.id === id), count, unitPrice: Number(p1.items.find((i) => i.id === id).price) });
   const cart = [line('I2', 20), line('I6', 10)];
   const ids = (ls) => ls.map((l) => l['@ondc/org/item_id']);
-  assert.deepEqual(ids(offerLines('P1', cart).eligible), ['discp10', 'slab2', 'freebie1']);
-  assert.deepEqual(ids(offerLines('P1', cart).applied), ['slab2']);
-  assert.deepEqual(ids(offerLines('P1', cart, ['freebie1', 'discp10']).applied), ['discp10', 'freebie1']);
-  assert.deepEqual(ids(offerLines('P1', cart, ['slab2', 'freebie1']).applied), ['slab2'], 'two non-additive offers never stack');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'select' }).eligible), ['discp10', 'slab2', 'freebie1']);
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'select' }).applied), ['slab2'], 'opt-in discp10 not applied at select');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['freebie1', 'discp10'] }).applied), ['discp10', 'freebie1']);
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: [] }).applied), [], 'nothing selected, nothing applied');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['slab1', 'combo1', 'discp10'] }).applied), ['discp10'], 'ineligible offers dropped');
+  assert.deepEqual(ids(offerLines('P1', cart, { stage: 'order', selectedIds: ['slab2', 'freebie1'] }).applied), ['slab2'], 'two non-additive offers never stack');
+});
+
+test('/select ignores offers the buyer sends; /init echoes the applied selection', async () => {
+  const s = SCENARIOS.find((x) => x.id === 'offer-discount');
+  const state = await runScenario(s, { ...env, send });
+  const sel = await send('select', R.select({ ...env, catalogProvider: state.catalog[0], retailer: state.retailer, lines: [{ id: 'I1', count: 20 }], offers: ['discp10'] }));
+  assert.equal(sel.callbacks[0].body.message.order.quote.price.value, '1040.00', 'opt-in offer not applied at select');
+  assert.deepEqual(state.onInit.message.order.offers, [{ id: 'discp10' }]);
+  assert.deepEqual(state.onConfirm.message.order.offers, [{ id: 'discp10' }]);
+});
+
+// The mode acts on whatever items are in the cart - here other carts and other affected items.
+for (const [id, cart, target] of [
+  ['out-of-stock', [{ id: 'I9', count: 20 }, { id: 'I12', count: 10 }], 'I12'],
+  ['partial-quantity', [{ id: 'I3', count: 6 }, { id: 'I4', count: 8 }], 'I4'],
+  ['item-inactive', [{ id: 'I5', count: 4 }, { id: 'I1', count: 20 }], undefined],
+  ['price-changed', [{ id: 'I12', count: 10 }], undefined],
+  ['init-qty-reduced', [{ id: 'I9', count: 40 }], undefined],
+]) {
+  test(`mode ${id} acts on the chosen items (${cart.map((l) => l.id).join(', ')}; affected ${target ?? 'first item'})`, async () => {
+    await runScenario(SCENARIOS.find((x) => x.id === id), { ...env, send, cart, target });
+  });
+}
+
+test('without a mode the same carts go through untouched', async () => {
+  const state = await runScenario(SCENARIOS.find((x) => x.id === 'place-order-p2'), { ...env, send, cart: [{ id: 'I13', count: 10 }, { id: 'I14', count: 12 }] });
+  assert.equal(state.onConfirm.message.order.state, 'Accepted');
+});
+
+test('a mode armed for a bap_id applies to requests without the header', async () => {
+  const { setMode } = await import('../lib/modes.js');
+  const bap = { id: 'armed-bap.test', uri: 'https://armed-bap.test/ondc' };
+  await setMode(bap.id, { mode: 'out_of_stock', items: ['I12'] });
+  const catalog = (await send('search', R.searchBroadcast({ bap }))).callbacks[0].body.message.catalog['bpp/providers'];
+  const reply = await send('select', R.select({ bap, bpp: env.bpp, catalogProvider: catalog[1], retailer: SCENARIOS[1].retailer, lines: [{ id: 'I9', count: 10 }, { id: 'I12', count: 10 }] }));
+  const q = reply.callbacks[0].body.message.order.quote.breakup;
+  assert.equal(reply.callbacks[0].body.error.code, '40002');
+  assert.equal(q.find((b) => b['@ondc/org/item_id'] === 'I12')['@ondc/org/item_quantity'].count, 0);
+  assert.equal(q.find((b) => b['@ondc/org/item_id'] === 'I9')['@ondc/org/item_quantity'].count, 10);
+  await setMode(bap.id, { mode: 'normal' });
 });
 
 test('post-order on an unknown order is NACK 30018', async () => {

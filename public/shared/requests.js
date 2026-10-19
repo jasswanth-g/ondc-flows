@@ -161,8 +161,24 @@ export const linesFromQuote = (quote) =>
     .filter((b) => b['@ondc/org/title_type'] === 'item' && b['@ondc/org/item_quantity'].count > 0)
     .map((b) => ({ id: b['@ondc/org/item_id'], count: b['@ondc/org/item_quantity'].count }));
 
+// The offers on_select applied (auto = yes): every auto + additive offer plus the first auto
+// non-additive one, read from the offer lines of the quote. A buyer's default selection for /init.
+export function autoOffers(onSelect) {
+  let exclusiveTaken = false;
+  return onSelect.message.order.quote.breakup
+    .filter((b) => b['@ondc/org/title_type'] === 'offer')
+    .filter((b) => {
+      const tag = Object.fromEntries((b.item.tags.find((t) => t.code === 'offer')?.list ?? []).map((e) => [e.code, e.value]));
+      if (tag.auto !== 'yes') return false;
+      if (tag.additive === 'yes') return true;
+      return exclusiveTaken ? false : (exclusiveTaken = true);
+    })
+    .map((b) => b['@ondc/org/item_id']);
+}
+
 // /init from /select + /on_select. Billing timestamps are fixed here and must be echoed unchanged.
 // `fulfillmentId` picks one of the on_select delivery options (default: the first).
+// `offers` is the buyer's offer selection (default: the offers on_select applied).
 export function init({ selectRequest, onSelect, retailer, paymentType = 'ON-FULFILLMENT', fulfillmentId, offers, ...opts }) {
   const sel = selectRequest.message.order;
   const os = onSelect.message.order;
@@ -176,7 +192,7 @@ export function init({ selectRequest, onSelect, retailer, paymentType = 'ON-FULF
       order: {
         provider: { id: os.provider.id, descriptor: os.provider.descriptor, locations: os.provider.locations },
         items: sel.items.map((i) => ({ id: i.id, fulfillment_id: fulfillment.id, quantity: i.quantity })),
-        ...offerRefs(offers ?? sel.offers?.map((o) => o.id)),
+        ...offerRefs(offers ?? autoOffers(onSelect)),
         billing: {
           name: retailer.shop_name,
           address: retailer.address,

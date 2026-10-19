@@ -50,8 +50,9 @@ async function start() {
   await runScenario(scenario, {
     bap,
     bpp: { id: cfg.bppId, uri: bppUri },
-    send: async (action, body) => {
-      const out = action === 'push' ? await handlePush(body, cfg) : await handle(action, body, cfg);
+    send: async (action, body, mode) => {
+      const c = { ...cfg, mode: mode ?? null };
+      const out = action === 'push' ? await handlePush(body, c) : await handle(action, body, c);
       return { response: out.response, callbacks: out.callbacks };
     },
     // The catalogue preload is in-process only; it is never sent to the buyer app.

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import ondc from '../api/ondc/[action].js';
 import img from '../api/img.js';
 import push from '../api/mock/push.js';
+import mode from '../api/mock/mode.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const port = Number(process.env.PORT ?? 3000);
@@ -37,11 +38,12 @@ http
   .createServer(async (req, res) => {
     const { pathname } = new URL(req.url, 'http://localhost');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Mock-Sync, X-Mock-Deliver');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Mock-Sync, X-Mock-Deliver, X-Mock-Mode, X-Mock-Mode-Items');
     res.setHeader('Access-Control-Expose-Headers', 'X-ONDC-Search-Response');
     try {
       if (/^\/(api\/)?ondc\/[a-z_]+$/.test(pathname)) return await ondc(req, res);
       if (pathname === '/api/mock/push') return await push(req, res);
+      if (pathname === '/api/mock/mode') return await mode(req, res);
       const m = pathname.match(/^\/img\/(.+)$/);
       if (m) {
         req.url = `/api/img?name=${m[1]}`;
