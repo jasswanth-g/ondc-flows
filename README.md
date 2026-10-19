@@ -94,16 +94,17 @@ items the buyer actually ordered: the ones named for the mode, else the first it
 | `price_changed` | `/select` | 5% above the catalogue price |
 | `init_qty_reduced` | `/init` | Half the ordered qty, no error (the buyer re-selects) |
 | `confirm_rejected` | `/confirm` | `on_confirm` with **30019** |
+| `min_order_value` | `/select` | Enforces the provider's published `order_value.min_value` (P1 500, P2 2000, P3 1500): a cart below it gets **30023** with the quote |
 
 - **Your buyer app:** activating a scenario arms its mode for the app's `bap_id`
   (`POST /api/mock/mode`); every call from that `bap_id` then gets it, on whatever items it orders.
 - **curl / tests:** send the mode on the request as `X-Mock-Mode`, with `X-Mock-Mode-Items`
   for the affected items. The header wins over the armed mode.
-- **A mode acts once per transaction and is remembered for it.** The re-select / re-init that
-  follows sees the same seller state, so an item stays out of stock and a halved quantity is not
-  halved again.
-- **Minimum order value is always a real check** against the provider's published
-  `order_value.min_value` (P1 500, P2 2000, P3 1500), returning **30023** with the quote.
+- **A mode acts once per flow run** (from ▶ until Restart / Stop) **and is remembered for it.** A
+  re-select or re-init may use a new `transaction_id` / `message_id`: it still sees the same seller,
+  so a disabled item stays disabled and a halved quantity is not halved again.
+- **Minimum order value is only checked in its own flow** (`min_order_value`), so it never
+  interferes with the other flows.
 
 ## Offers
 

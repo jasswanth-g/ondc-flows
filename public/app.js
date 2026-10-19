@@ -47,6 +47,7 @@ const bapId = () => bapIdInput.value.trim().replace(/\/+$/, '');
 const MODE_LABELS = {
   normal: 'Normal', item_inactive: 'Item inactive', out_of_stock: 'Out of stock', partial_quantity: 'Partial quantity',
   price_changed: 'Price changed', init_qty_reduced: 'Quantity reduced at init', confirm_rejected: 'Seller rejects confirm',
+  min_order_value: 'Minimum order value',
 };
 let armed = null; // { mode, items, scenario, at } running for bapId()
 let health = null; // { store, env, ok, error?, vercel } from /api/mock/health

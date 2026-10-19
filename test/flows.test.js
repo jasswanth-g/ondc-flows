@@ -224,3 +224,41 @@ test('live tracking matches a buyer app\'s real calls to the scenario steps', as
   assert.deepEqual(inFlight.map((l) => l.phase), ['running', 'waiting', 'waiting', 'waiting']);
   await setMode(bap.id, { mode: 'normal' });
 });
+
+// Re-selects may come on a new transaction_id / message_id: the seller's state belongs to the flow run.
+test('item inactive: re-select on a new transaction keeps the first item disabled and leaves the second alone', async () => {
+  const { setMode } = await import('../lib/modes.js');
+  const bap = { id: 'run-bap.test', uri: 'https://run-bap.test/ondc' };
+  await setMode(bap.id, { mode: 'item_inactive', scenario: 'item-inactive' });
+  const catalog = (await send('search', R.searchBroadcast({ bap }))).callbacks[0].body.message.catalog['bpp/providers'];
+  const p1 = catalog.find((p) => p.id === 'P1');
+  const retailer = SCENARIOS.find((x) => x.id === 'item-inactive').retailer;
+  const qty = (reply, id) => reply.callbacks.at(-1).body.message.order.quote.breakup.find((b) => b['@ondc/org/item_id'] === id)['@ondc/org/item_quantity'].count;
+  const lines = [{ id: 'I1', count: 20 }, { id: 'I2', count: 10 }];
+
+  const first = await send('select', R.select({ bap, bpp: env.bpp, catalogProvider: p1, retailer, lines }));
+  assert.equal(first.callbacks.at(-1).body.error.code, '40002');
+  assert.deepEqual([qty(first, 'I1'), qty(first, 'I2')], [0, 10]);
+
+  // New transaction, same items: I1 is still inactive, I2 is not newly disabled.
+  const again = await send('select', R.select({ bap, bpp: env.bpp, catalogProvider: p1, retailer, lines }));
+  assert.deepEqual([qty(again, 'I1'), qty(again, 'I2')], [0, 10]);
+  assert.equal(again.callbacks.length, 1, 'no second incremental disable');
+
+  // New transaction without I1: goes through.
+  const onlyB = await send('select', R.select({ bap, bpp: env.bpp, catalogProvider: p1, retailer, lines: [{ id: 'I2', count: 10 }] }));
+  assert.equal(onlyB.callbacks.at(-1).body.error, undefined);
+  await setMode(bap.id, { mode: 'normal' });
+});
+
+test('minimum order value is only enforced in its own flow', async () => {
+  const catalog = (await send('search', R.searchBroadcast(env))).callbacks[0].body.message.catalog['bpp/providers'];
+  const p2 = catalog.find((p) => p.id === 'P2'); // min_value 2000.00
+  const small = () => R.select({ ...env, catalogProvider: p2, retailer: SCENARIOS[1].retailer, lines: [{ id: 'I11', count: 1 }] });
+  for (const mode of [undefined, { name: 'out_of_stock', items: ['I99'] }, { name: 'price_changed', items: [] }]) {
+    const reply = await send('select', small(), mode);
+    assert.notEqual(reply.callbacks.at(-1).body.error?.code, '30023', `30023 in mode ${mode?.name ?? 'none'}`);
+  }
+  const mov = await send('select', small(), { name: 'min_order_value', items: [] });
+  assert.equal(mov.callbacks.at(-1).body.error.code, '30023');
+});

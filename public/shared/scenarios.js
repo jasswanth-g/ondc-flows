@@ -229,7 +229,7 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'min-order-value', anyItems: true, cartRule: 'below_mov', group: 'Pre-order', title: 'Minimum order value not met', providerId: 'P2', retailer: LAKSHMI,
+    id: 'min-order-value', anyItems: true, cartRule: 'below_mov', mode: 'min_order_value', group: 'Pre-order', title: 'Minimum order value not met', providerId: 'P2', retailer: LAKSHMI,
     summary: 'A cart below the distributor\'s published order_value.min_value (P1 500, P2 2000, P3 1500). The buyer tops it up and re-selects.',
     steps: [
       selectStep({ buyer: () => 'Add items worth less than the distributor\'s minimum order value (P1 ₹500, P2 ₹2000, P3 ₹1500) and open the cart: the app sends /select.',
