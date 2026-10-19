@@ -8,12 +8,14 @@ pre-order-service handles, every offer type in the contract, and post-order stat
 
 ## How to test your buyer app
 
-1. Open the playground (`/`) and enter the `bap_id` your app sends in `context.bap_id`.
+1. Open the playground (`/`) and enter your app's `bap_id` **or** `bap_uri` (either works; apps
+   that called the mock recently are listed as one-click chips).
 2. Point the app at the `bpp_uri` shown at the top (`<host>/ondc`).
-3. Pick a scenario and press **Activate for my bap_id**. The page lists what to do in the app for
-   each step and what the mock will answer, and then tracks it **live**: each step shows "waiting
-   for /select from your app…" until the call arrives, then the request, the callback, whether
-   your app ACKed it, and whether the answer matched the scenario. Order flows take **any items**:
+3. Press **▶** on a scenario. The page lists what to do in the app for each step and what the mock
+   will answer, then tracks it **live**: each step goes *waiting* → *running* (your app's call
+   arrived, the callback is being sent) → *completed* (with whether your app ACKed it and whether the
+   answer matched the scenario). A catalogue `/search` before an order is tracked too, and shown as
+   *skipped* if the app goes straight to `/select`. **■ Stop** puts the seller back to normal. Order flows take **any items**:
    the seller mode acts on whatever the app ordered (the first item, unless you name items when
    activating). Only offer scenarios name items, because each offer qualifies specific items.
 4. The **Activity** tab shows every call from the app, also live.

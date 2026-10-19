@@ -33,7 +33,8 @@ const store = {
 // ---- the buyer app --------------------------------------------------------------------------
 const bapIdInput = $('#bapId');
 bapIdInput.value = store.get('bapId', '');
-const bapId = () => bapIdInput.value.trim();
+// The buyer app is identified by its bap_id or bap_uri; the mock matches calls by either.
+const bapId = () => bapIdInput.value.trim().replace(/\/+$/, '');
 
 const MODE_LABELS = {
   normal: 'Normal', item_inactive: 'Item inactive', out_of_stock: 'Out of stock', partial_quantity: 'Partial quantity',
@@ -44,15 +45,32 @@ let armed = null; // { mode, items, scenario, at } armed for bapId()
 function refreshTarget() {
   store.set('bapId', bapId());
   bapIdInput.classList.toggle('needs', !bapId());
+  const running = armed?.scenario && SCENARIOS.find((x) => x.id === armed.scenario);
   $('#targetHint').replaceChildren(...(bapId()
-    ? ['Point the app at ', el('code', {}, BPP.uri), '. Calls from ', el('code', {}, bapId()), ' are answered per the active scenario',
-      armed ? [': ', el('b', {}, SCENARIOS.find((x) => x.id === armed.scenario)?.title ?? MODE_LABELS[armed.mode]), ` (seller mode ${MODE_LABELS[armed.mode]}${armed.items?.length ? `, items ${armed.items.join(', ')}` : ''})`] : '', '.']
-    : [el('b', {}, 'Enter the bap_id your buyer app sends in context.bap_id.'), ' It is how the mock knows which scenario to apply and whose calls to show.']));
+    ? ['Point the app at ', el('code', {}, BPP.uri), '. ',
+      running ? el('span', {}, 'Running: ', el('b', {}, running.title), armed.mode !== 'normal' ? ` (seller mode ${MODE_LABELS[armed.mode]}${armed.items?.length ? `, items ${armed.items.join(', ')}` : ''})` : '', '.')
+        : 'Press ▶ on a scenario to start it.']
+    : [el('b', {}, 'Enter your buyer app\'s bap_id or bap_uri.'), ' The mock matches your app\'s calls by either.']));
   for (const b of document.querySelectorAll('[data-needs-bap]')) {
     b.disabled = !bapId();
-    b.title = bapId() ? '' : 'Enter your buyer app\'s bap_id above';
+    b.title = bapId() ? (b.dataset.title ?? '') : 'Enter your buyer app\'s bap_id or bap_uri above';
   }
+  for (const b of document.querySelectorAll('.scenario-item')) b.classList.toggle('running', Boolean(running) && b.dataset.id === running.id);
 }
+
+// Buyer apps that called the mock recently: one click fills the field with what the app really sends.
+async function loadCallers() {
+  try {
+    const { callers = [] } = await fetch('/api/mock/activity', { cache: 'no-store' }).then((r) => r.json());
+    $('#callers').replaceChildren(...(callers.length
+      ? [el('span', { class: 'muted' }, 'Recent callers:'), ...callers.map((c) => el('button', {
+          class: `ghost chip ${c.bap_id === bapId() || c.bap_uri === bapId() ? 'current' : ''}`, type: 'button', title: c.bap_uri ? `bap_uri ${c.bap_uri}` : '',
+          onclick: () => { bapIdInput.value = c.bap_id; refreshTarget(); loadArmed(); loadCallers(); pollActivity(true); },
+        }, c.bap_id))]
+      : []));
+  } catch { /* optional hint */ }
+}
+setInterval(loadCallers, 10000);
 
 async function loadArmed() {
   armed = null;
@@ -148,15 +166,18 @@ let live = null; // the active scenario being tracked: { sc, steps, catalog, key
 
 const isActive = (sc) => armed && armed.scenario === sc.id && armed.mode === (sc.mode ?? 'normal');
 
-async function activate(sc, items) {
+// ▶ starts a scenario for the buyer app (arms its seller mode and starts tracking from now);
+// ■ stops it (seller back to normal).
+async function start(sc, items = '') {
+  if (!bapId()) return;
   const m = await post('/api/mock/mode', { bap_id: bapId(), mode: sc.mode ?? 'normal', items, scenario: sc.id });
   if (m.error) return alertBox(m.error);
   armed = { mode: m.mode, items: m.items, scenario: m.scenario, at: m.at };
   refreshTarget();
-  renderScenario(sc);
+  await renderScenario(sc);
   pollActivity(true);
 }
-async function deactivate(sc) {
+async function stop(sc) {
   await post('/api/mock/mode', { bap_id: bapId(), mode: 'normal' });
   armed = { mode: 'normal', items: [], scenario: undefined, at: undefined };
   refreshTarget();
@@ -164,23 +185,16 @@ async function deactivate(sc) {
 }
 const alertBox = (msg) => $('#scenarioRun').prepend(el('p', { class: 'pill bad' }, msg));
 
-function activationCard(sc) {
+function controls(sc) {
   const active = isActive(sc);
-  const items = el('input', { placeholder: 'affected item ids, e.g. I1,I2 (default: the first item in the cart)', spellcheck: 'false', value: active ? (armed.items ?? []).join(',') : '' });
-  const activateBtn = el('button', { class: 'play', type: 'button', 'data-needs-bap': '' }, active ? 'Restart' : 'Activate for my bap_id');
-  activateBtn.onclick = () => activate(sc, items.value);
-  const offBtn = active && sc.mode ? el('button', { class: 'ghost', type: 'button', onclick: () => deactivate(sc) }, 'Back to normal') : null;
-  return el('div', { class: `card activation ${active ? 'is-active' : ''}` },
-    el('div', { class: 'activation-head' },
-      el('span', { class: `pill ${active ? 'ok' : ''}` }, active ? `active for ${bapId()}` : 'not active'),
-      el('span', { class: 'muted' }, `Seller mode: ${MODE_LABELS[sc.mode ?? 'normal']}`)),
-    sc.mode ? el('label', { class: 'grow' }, 'Affected items (optional)', items) : null,
-    el('div', { class: 'row' }, activateBtn, offBtn),
-    el('p', { class: 'hint' }, active
-      ? 'Tracking calls from your app since activation. Restart to start the flow again.'
-      : sc.mode
-        ? 'Once active, every call from your app gets this seller behaviour on the items it orders, until you switch back to normal (or 24h).'
-        : 'This scenario needs no special seller behaviour; activating sets the seller to normal for your app.'));
+  const items = sc.mode ? el('input', { class: 'items', placeholder: 'affected items (optional), e.g. I1,I2', spellcheck: 'false', value: active ? (armed.items ?? []).join(',') : '' }) : null;
+  const startBtn = el('button', { class: 'play big', type: 'button', 'data-needs-bap': '', 'data-title': 'Start this scenario for your app' }, active ? '↻ Restart' : '▶ Start');
+  startBtn.onclick = () => start(sc, items?.value ?? '');
+  const stopBtn = active ? el('button', { class: 'ghost', type: 'button', onclick: () => stop(sc) }, '■ Stop') : null;
+  return el('div', { class: 'controls' }, startBtn, stopBtn, items,
+    el('span', { class: 'muted' }, active
+      ? `Running since ${new Date(armed.at).toLocaleTimeString()} - use your app; each step updates as its call arrives.`
+      : sc.mode ? `Seller mode: ${MODE_LABELS[sc.mode]} on the items your app orders.` : 'Normal seller.'));
 }
 
 async function renderScenario(sc) {
@@ -208,10 +222,10 @@ async function renderScenario(sc) {
   $('#scenarioRun').replaceChildren(
     el('div', { class: 'run-head' },
       el('div', {}, el('span', { class: 'pill' }, sc.group), el('h2', {}, sc.title), el('p', { class: 'muted' }, sc.summary))),
-    activationCard(sc),
-    el('h3', {}, live ? 'Live - waiting for your app' : 'What to do'),
+    controls(sc),
+    el('h3', {}, live ? 'Live - waiting for your app' : 'Steps'),
     el('ol', { class: 'buyer-steps' }, steps.map((r) => r.li)),
-    live ? null : el('p', { class: 'hint' }, 'Activate the scenario to track your app\'s calls here, step by step.'),
+    live ? null : el('p', { class: 'hint' }, 'Press ▶ Start, then use your app: each step goes waiting → running → completed as its call arrives.'),
     simulation(sc, state),
   );
   refreshTarget();
@@ -292,8 +306,10 @@ function cartEditor(sc, state, provider) {
 let group;
 for (const sc of SCENARIOS) {
   if (sc.group !== group) $('#scenarioList').append(el('h4', {}, (group = sc.group)));
-  $('#scenarioList').append(el('button', { class: 'scenario-item', type: 'button', 'data-id': sc.id, onclick: () => renderScenario(sc) },
-    el('span', {}, sc.title), sc.mode ? el('span', { class: 'muted steps-count' }, MODE_LABELS[sc.mode]) : null));
+  const play = el('button', { class: 'play mini', type: 'button', 'data-needs-bap': '', 'data-title': `Start "${sc.title}"`, 'aria-label': `Start ${sc.title}` }, '▶');
+  play.onclick = (e) => { e.stopPropagation(); start(sc); };
+  $('#scenarioList').append(el('div', { class: 'scenario-item', 'data-id': sc.id, onclick: () => renderScenario(sc) },
+    play, el('span', { class: 'title' }, sc.title), sc.mode ? el('span', { class: 'muted steps-count' }, MODE_LABELS[sc.mode]) : null));
 }
 
 // ---- live tracking --------------------------------------------------------------------------
@@ -302,25 +318,35 @@ function updateLive(activity) {
   if (!live || !isActive(live.sc)) return;
   const since = armed.at ?? '';
   const entries = activity.filter((a) => a.at >= since).reverse();
-  const key = entries.map((a) => a.id + (a.callbacks ?? []).map((c) => c.delivery?.status ?? '').join()).join();
+  const key = entries.map((a) => a.id + a.status + (a.callbacks ?? []).map((c) => c.delivery?.status ?? '').join()).join();
   if (key === live.key) return;
   live.key = key;
   const results = trackLive(live.sc, entries, { catalog: live.catalog, modeItems: armed.items ?? [] });
-  const next = results.findIndex((r) => !r.entry);
+  const next = results.findIndex((r) => r.phase === 'waiting');
   results.forEach((r, i) => {
     const row = live.steps[i];
     row.expect.textContent = r.expect ?? row.expect.textContent;
     row.detail.replaceChildren();
     if (r.entry) {
-      const delivered = (r.entry.callbacks ?? []).every((c) => !c.delivery || (c.delivery.status >= 200 && c.delivery.status < 300));
-      row.status.textContent = r.problem ? `unexpected: ${r.problem}` : delivered ? 'received · as expected' : 'as expected · your app did not ACK the callback';
-      row.status.className = `pill ${r.problem || !delivered ? 'bad' : 'ok'}`;
-      row.li.className = 'buyer-step done';
       row.detail.append(
         callBlock({ pill: 'REQUEST', pillClass: 'cb', name: r.entry.kind === 'seller_action' ? 'seller action' : `/${r.entry.action}`, meta: new Date(r.entry.at).toLocaleTimeString(), sections: [['from your app', r.entry.request], ['mock sync response', r.entry.response]], open: false }),
         ...callbackBlocks(r.entry.callbacks, false));
+    }
+    if (r.phase === 'running') {
+      row.status.textContent = `running - sending ${(r.entry.callbacks ?? []).map((c) => `/${c.body.context.action}`).join(' + ') || 'the answer'} to your app…`;
+      row.status.className = 'pill running';
+      row.li.className = 'buyer-step next';
+    } else if (r.phase === 'completed') {
+      const delivered = (r.entry.callbacks ?? []).every((c) => !c.delivery || (c.delivery.status >= 200 && c.delivery.status < 300));
+      row.status.textContent = r.problem ? `completed - unexpected: ${r.problem}` : delivered ? 'completed · as expected' : 'completed - your app did not ACK the callback';
+      row.status.className = `pill ${r.problem || !delivered ? 'bad' : 'ok'}`;
+      row.li.className = 'buyer-step done';
+    } else if (r.phase === 'skipped') {
+      row.status.textContent = 'skipped - your app used its cached catalogue';
+      row.status.className = 'pill';
+      row.li.className = 'buyer-step skipped';
     } else if (i === next) {
-      row.status.textContent = r.step.action === 'push' ? 'waiting - press the seller action' : `waiting for /${r.step.action} from your app…`;
+      row.status.textContent = r.step.action === 'push' ? 'waiting - press the seller action in Activity' : `waiting for /${r.step.action} from your app…`;
       row.status.className = 'pill waiting';
       row.li.className = 'buyer-step next';
     } else {
@@ -329,9 +355,10 @@ function updateLive(activity) {
       row.li.className = 'buyer-step';
     }
   });
-  const done = next === -1;
+  const runningNow = results.some((r) => r.phase === 'running');
+  const done = next === -1 && !runningNow;
   const head = $('#scenarioRun h3');
-  if (head) head.textContent = done ? (results.some((r) => r.problem) ? 'Live - finished with unexpected answers' : 'Live - all steps received as expected') : 'Live - waiting for your app';
+  if (head) head.textContent = done ? (results.some((r) => r.problem) ? 'Completed - with unexpected answers' : 'Completed - every step as expected') : runningNow ? 'Running…' : 'Live - waiting for your app';
 }
 
 // ---- activity -------------------------------------------------------------------------------
@@ -360,7 +387,7 @@ async function pollActivity(force = false) {
       $('#activityState').textContent = 'could not load activity';
     }
   }
-  pollTimer = setTimeout(pollActivity, live ? 1500 : 3000);
+  pollTimer = setTimeout(pollActivity, live ? 1000 : 3000);
 }
 
 function renderActivity(entries) {
@@ -485,5 +512,6 @@ showTab(['scenarios', 'activity', 'catalogue', 'retailers'].includes(store.get('
 
 refreshTarget();
 loadArmed();
+loadCallers();
 pollActivity();
 renderScenario(SCENARIOS.find((x) => x.id === store.get('scenario', '')) ?? SCENARIOS[0]);

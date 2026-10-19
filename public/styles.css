@@ -85,9 +85,13 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .target label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); max-width: 560px; }
 .target .hint { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
 button.play { background: var(--ok); border-color: var(--ok); color: #fff; }
-.scenario-item { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; text-align: left; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 8px; font-weight: 500; padding: 7px 10px; }
+.scenario-item { display: flex; align-items: center; gap: 8px; border: 1px solid transparent; border-radius: 8px; padding: 5px 8px; cursor: pointer; }
+.scenario-item .title { flex: 1; font-weight: 500; }
 .scenario-item:hover { background: var(--surface-2); }
 .scenario-item.current { background: var(--surface-2); border-color: var(--border); }
+.scenario-item.running { border-color: var(--ok); }
+.scenario-item.running .title::after { content: ' ● running'; color: var(--ok); font-size: 12px; font-weight: 600; }
+button.play.mini { padding: 2px 9px; font-size: 12px; line-height: 1.4; }
 .steps-count { font-size: 12px; font-weight: 400; white-space: nowrap; }
 .step-expect { margin: 8px 0 0 34px; font-size: 13px; color: var(--muted); }
 .offers { margin-top: 12px; }
@@ -102,12 +106,8 @@ button.play { background: var(--ok); border-color: var(--ok); color: #fff; }
 .spacer { flex: 1; }
 .step-out:not(:empty) { margin-top: 12px; }
 
-/* activation + buyer instructions */
-.activation { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
-.activation.is-active { border-color: var(--ok); }
-.activation-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-.activation label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-.activation .hint, .hint { margin: 0; font-size: 13px; color: var(--muted); }
+/* buyer instructions */
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
 .buyer-steps { margin: 0 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
 .buyer-step { display: flex; flex-direction: column; gap: 3px; font-size: 14px; }
 .who { display: inline-block; min-width: 96px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
@@ -123,13 +123,28 @@ td.actions button { padding: 4px 10px; font-size: 12px; }
 button.danger { color: var(--bad); border-color: var(--bad); }
 main > .tabs { padding: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 
+/* recent callers */
+.callers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 13px; }
+.callers:empty { display: none; }
+button.chip { padding: 2px 10px; font-size: 12px; border-radius: 999px; font-family: var(--mono); }
+button.chip.current { border-color: var(--ok); color: var(--ok); }
+
+/* scenario controls */
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 16px; }
+button.play.big { padding: 9px 18px; font-size: 15px; }
+.controls .items { flex: 0 1 260px; }
+
 /* live tracking */
 .step-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .buyer-step.next { border-left: 3px solid var(--accent); padding-left: 10px; margin-left: -13px; }
 .buyer-step.done .step-title b { color: var(--ok); }
 .pill.waiting { background: var(--warn-bg); color: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+.pill.running { background: var(--surface-2); color: var(--accent); }
+.pill.running::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.buyer-step.skipped { opacity: .6; }
 @keyframes pulse { 50% { opacity: .45; } }
-@media (prefers-reduced-motion: reduce) { .pill.waiting { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .pill.waiting, .pill.running::before { animation: none; } }
 .live-detail:not(:empty) { margin-top: 6px; }
 
 /* cart editor */
