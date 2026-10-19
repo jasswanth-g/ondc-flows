@@ -1,0 +1,17 @@
+{
+  "name": "ondc-eb2b-mock-seller",
+  "version": "1.0.0",
+  "description": "Mock ONDC eB2B (DigiDukaan) Seller NP for buyer-app developers: full catalog on_search through on_confirm",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@vercel/functions": "3.10.1"
+  }
+}

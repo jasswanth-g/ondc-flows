@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>eB2B Mock Seller</title>
+  <meta name="description" content="Mock ONDC eB2B (DigiDukaan) Seller NP for buyer-app developers - every scenario as a playable flow.">
+  <link rel="icon" href="/img/seller.svg">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div class="brand">
+        <h1>eB2B Mock Seller NP</h1>
+        <p>ONDC:RETeB2B · core 1.2.5 · pre-order, offers and post-order scenarios</p>
+      </div>
+      <div class="endpoint">
+        <span class="label">bpp_uri</span>
+        <code id="bppUri"></code>
+        <button class="ghost" data-copy="#bppUri" type="button">Copy</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs wrap" role="tablist">
+    <button role="tab" data-tab="scenarios" aria-selected="true">Scenarios</button>
+    <button role="tab" data-tab="catalogue">Catalogue</button>
+    <button role="tab" data-tab="retailers">Retailers</button>
+  </nav>
+
+  <main class="wrap">
+    <section id="tab-scenarios" class="tab">
+      <section class="card target">
+        <div class="target-fields">
+          <label>Buyer app bap_uri <input id="bapUri" placeholder="https://your-buyer-app/ondc" spellcheck="false"></label>
+          <label>bap_id <input id="bapId" placeholder="defaults to the bap_uri host" spellcheck="false"></label>
+        </div>
+        <p class="hint" id="targetHint"></p>
+      </section>
+      <div class="split">
+        <aside id="scenarioList" class="scenario-list"></aside>
+        <div id="scenarioRun"></div>
+      </div>
+    </section>
+
+    <section id="tab-catalogue" class="tab" hidden>
+      <div id="catalogue"></div>
+    </section>
+
+    <section id="tab-retailers" class="tab" hidden>
+      <div id="retailers"></div>
+    </section>
+  </main>
+
+  <template id="tplCall">
+    <details class="call" open>
+      <summary><span class="pill"></span><span class="name"></span><span class="meta muted"></span></summary>
+      <div class="call-body"></div>
+    </details>
+  </template>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

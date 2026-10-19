@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/ondc/:action", "destination": "/api/ondc/:action" },
+    { "source": "/img/:name", "destination": "/api/img?name=:name" }
+  ],
+  "headers": [
+    {
+      "source": "/(ondc|api)/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, X-Mock-Sync, X-Mock-Deliver" },
+        { "key": "Access-Control-Expose-Headers", "value": "X-ONDC-Search-Response" }
+      ]
+    }
+  ]
+}
