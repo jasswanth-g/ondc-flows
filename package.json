@@ -12,6 +12,7 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "@vercel/functions": "3.10.1"
+    "@vercel/functions": "3.10.1",
+    "postgres": "3.4.9"
   }
 }

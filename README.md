@@ -47,13 +47,14 @@ Framework preset **Other**, no build command (`vercel.json` serves `public/` and
 | `PUBLIC_BASE_URL` | request host | Base for image URLs and `bpp_uri` |
 | `BPP_ID` / `BPP_URI` | host / `<base>/ondc` | Sent in callback `context` |
 | `SIGNING_PRIVATE_KEY`, `BPP_UNIQUE_KEY_ID` | unset | Sign callbacks (ed25519 + BLAKE2b-512). Unsigned if unset |
-| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | unset | Upstash Redis (Vercel KV). Needed on Vercel for orders, armed modes and per-transaction state |
+| `POSTGRES_URL` | unset | Postgres for orders, activated scenarios, per-transaction state and the activity log. Set by Vercel's Supabase integration (the pooled URL). Tables `mock_kv` / `mock_list` are created on first use, with RLS on |
 | `FINDER_FEE_TYPE` / `FINDER_FEE_AMOUNT` | `percent` / `3.54` | Used in `on_init` when `/init` doesn't carry it |
 | `CREATION_DELAY_MS` | `5000` | Delay before the unsolicited "retailer created" `on_search` |
 | `PUSH_DELAY_MS` | `3000` | Delay before the incremental push update |
 
-Without KV, state lives in one function instance's memory: `/status` may answer **30018**, and an
-armed mode or a mode's per-transaction effect may not be seen by the next request.
+Without `POSTGRES_URL`, state lives in one function instance's memory, which is fine for
+`npm run dev` but not on Vercel: `/status` may answer **30018**, and an activated scenario or the
+activity log may not be seen by the next request.
 
 ## API
 
