@@ -21,7 +21,8 @@ The playground (`/`) works like the ONDC Workbench's flow testing:
    `on_cancel`) are sent by the page itself once the step before them completes.
 5. Click any card to see its actual JSON on the right: **Request** (what your app sent, or the
    callback the mock sent), **Response** (the mock's ACK, or your app's reply to the callback),
-   **Guide** (what to do in the app and what the mock answers). **Follow live** tracks the latest.
+   **Guide** (what to do in the app and what the mock answers). **Copy** takes the whole JSON
+   shown. **Follow live** tracks the latest.
 6. **Orders** lists every order your app confirmed. The selected order shows its state and
    fulfillment state, seller, retailer, delivery, payment, items, applied offers, quote totals, its
    history (confirm → packed → … or cancel, and by whom) and the calls that touched it, plus the
@@ -147,7 +148,8 @@ follow the retail-seller-service offers flow:
   discount; only the applied ones count in `quote.price`. With no offer ids from the buyer: every
   `auto: yes, additive: yes` offer; only when there is none, the best `auto: yes, additive: no` one.
   With offer ids: the buyer wins over auto (the best selected exclusive alone, else the selected
-  additive ones plus every auto additive one). A line that was not applied is sent with `auto: no`.
+  additive ones plus every auto additive one). Every applied line is sent with `auto: yes` (the
+  ids the buyer sent included, opt-in ones too); a line that was not applied with `auto: no`.
 - **`/init`, `/confirm`:** only the ids the buyer sends in `order.offers` (auto offers are not
   auto-applied, so the buyer carries them forward), same exclusive rule, re-evaluated on the current
   cart. Only the applied offers are listed, and returned in `order.offers`.

@@ -328,17 +328,28 @@ function inspectorContent({ card, result, sc }) {
   return json(replies.length === 1 ? replies[0] : replies);
 }
 
+// The inspector's Copy takes the whole JSON, not just the lines the search filter shows.
+let inspText = '';
+$('#inspCopy').onclick = async (e) => {
+  if (!inspText) return;
+  await navigator.clipboard.writeText(inspText);
+  e.target.textContent = 'Copied';
+  setTimeout(() => (e.target.textContent = 'Copy'), 1200);
+};
+
 function renderInspector() {
   for (const b of document.querySelectorAll('[data-insp]')) b.setAttribute('aria-selected', String(b.dataset.insp === inspTab));
   const x = inspected();
   if (!x) {
     $('#inspTitle').textContent = 'Select a call';
     $('#inspBody').textContent = '{}';
+    inspText = '';
     return;
   }
   $('#inspTitle').replaceChildren(el('b', {}, `${x.k + 1}: ${x.card.label}`), ' ', el('span', { class: 'muted' }, `· ${x.sc.title}`),
     selected ? el('button', { class: 'ghost tiny', type: 'button', onclick: () => { selected = null; renderFlows(); } }, 'Follow live') : null);
   const text = inspectorContent(x);
+  inspText = text;
   const q = $('#inspSearch').value.trim().toLowerCase();
   $('#inspBody').textContent = q ? text.split('\n').filter((l) => l.toLowerCase().includes(q)).join('\n') || '// no line matches' : text;
 }

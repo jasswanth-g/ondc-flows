@@ -161,18 +161,13 @@ export const linesFromQuote = (quote) =>
     .filter((b) => b['@ondc/org/title_type'] === 'item' && b['@ondc/org/item_quantity'].count > 0)
     .map((b) => ({ id: b['@ondc/org/item_id'], count: b['@ondc/org/item_quantity'].count }));
 
-// The offers on_select applied, read from its offer lines: an applied auto offer keeps auto = yes
-// (a losing one is sent as auto = no). Of the ids the buyer sent on /select, the best exclusive one
-// wins alone, else they stack with the auto ones. A buyer's default selection for /init, which
-// applies only the ids it is sent.
-export function appliedOnSelect(onSelect, selectedIds = []) {
-  const lines = onSelect.message.order.quote.breakup
-    .filter((b) => b['@ondc/org/title_type'] === 'offer')
-    .map((b) => ({ id: b['@ondc/org/item_id'], value: Number(b.price.value), ...Object.fromEntries((b.item.tags.find((t) => t.code === 'offer')?.list ?? []).map((e) => [e.code, e.value])) }));
-  const selected = lines.filter((l) => selectedIds.includes(l.id));
-  const exclusive = selected.filter((l) => l.additive === 'no').sort((x, y) => x.value - y.value);
-  if (exclusive.length) return [exclusive[0].id];
-  return [...new Set([...lines.filter((l) => l.auto === 'yes').map((l) => l.id), ...selected.map((l) => l.id)])];
+// The offers on_select applied: its offer lines with auto = yes (the auto offers that won and the ids
+// the buyer sent that apply; the rest are listed with auto = no). A buyer's default selection for
+// /init, which applies only the ids it is sent.
+export function appliedOnSelect(onSelect) {
+  return onSelect.message.order.quote.breakup
+    .filter((b) => b['@ondc/org/title_type'] === 'offer' && b.item.tags.find((t) => t.code === 'offer')?.list.find((e) => e.code === 'auto')?.value === 'yes')
+    .map((b) => b['@ondc/org/item_id']);
 }
 
 // /init from /select + /on_select. Billing timestamps are fixed here and must be echoed unchanged.
@@ -191,7 +186,7 @@ export function init({ selectRequest, onSelect, retailer, paymentType = 'ON-FULF
       order: {
         provider: { id: os.provider.id, descriptor: os.provider.descriptor, locations: os.provider.locations },
         items: sel.items.map((i) => ({ id: i.id, fulfillment_id: fulfillment.id, quantity: i.quantity })),
-        ...offerRefs(offers ?? appliedOnSelect(onSelect, (selectRequest.message.order.offers ?? []).map((o) => o.id))),
+        ...offerRefs(offers ?? appliedOnSelect(onSelect)),
         billing: {
           name: retailer.shop_name,
           address: retailer.address,

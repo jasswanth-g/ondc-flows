@@ -426,8 +426,8 @@ export const SCENARIOS = [
     cart: [{ id: ID.I10, count: 5 }, { id: ID.I12, count: 10 }, { id: ID.I15, count: 2 }],
     summary: 'The buyer sends disc5 (opt-in, additive) on /select: it stacks with flat150 (auto, additive). slabw1 (auto, exclusive) loses.',
     steps: [
-      selectStep({ offers: [ID.disc5], expect: 'flat150 (-150.00) + disc5 (-52.00) applied; slabw1 sent as auto = no: quote.price 5913.00.',
-        check: (r) => all(noError(r), offerIs(r, ID.flat150, '-150.00', 'yes'), offerIs(r, ID.disc5, '-52.00'), offerIs(r, ID.slabw1, '-99.00', 'no'), priceIs(r, '5913.00')) }),
+      selectStep({ offers: [ID.disc5], expect: 'flat150 (-150.00) + disc5 (-52.00) applied, both auto = yes; slabw1 sent as auto = no: quote.price 5913.00.',
+        check: (r) => all(noError(r), offerIs(r, ID.flat150, '-150.00', 'yes'), offerIs(r, ID.disc5, '-52.00', 'yes'), offerIs(r, ID.slabw1, '-99.00', 'no'), priceIs(r, '5913.00')) }),
       initStep({ expect: 'Buyer sends flat150 + disc5: both applied, quote.price 5913.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.flat150, ID.disc5]), priceIs(r, '5913.00')) }),
       confirmStep(),
     ],
@@ -437,8 +437,8 @@ export const SCENARIOS = [
     cart: [{ id: ID.I10, count: 6 }, { id: ID.I12, count: 10 }],
     summary: 'The buyer sends excl300 (opt-in, exclusive): it blocks every other offer, the auto ones included.',
     steps: [
-      selectStep({ offers: [ID.excl300], expect: 'Only excl300 applied (-300.00); flat150 (-150.00) and slabw1 (-118.80) listed with auto = no: quote.price 5270.00.',
-        check: (r) => all(noError(r), offerIs(r, ID.excl300, '-300.00'), offerIs(r, ID.flat150, '-150.00', 'no'), offerIs(r, ID.slabw1, '-118.80', 'no'), priceIs(r, '5270.00')) }),
+      selectStep({ offers: [ID.excl300], expect: 'Only excl300 applied (-300.00, auto = yes); flat150 (-150.00) and slabw1 (-118.80) listed with auto = no: quote.price 5270.00.',
+        check: (r) => all(noError(r), offerIs(r, ID.excl300, '-300.00', 'yes'), offerIs(r, ID.flat150, '-150.00', 'no'), offerIs(r, ID.slabw1, '-118.80', 'no'), priceIs(r, '5270.00')) }),
       initStep({ expect: 'Buyer sends excl300: applied alone, quote.price 5270.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.excl300]), priceIs(r, '5270.00')) }),
       confirmStep(),
     ],
@@ -449,7 +449,7 @@ export const SCENARIOS = [
     summary: 'The buyer sends slabw1 + excl300 (both exclusive) + disc5 (additive). The exclusive with the highest discount wins and blocks the rest.',
     steps: [
       selectStep({ offers: [ID.slabw1, ID.excl300, ID.disc5], expect: 'Only excl300 applied (-300.00 beats slabw1 -118.80); disc5 and flat150 blocked: quote.price 6310.00.',
-        check: (r) => all(noError(r), offerIs(r, ID.excl300, '-300.00'), offerIs(r, ID.slabw1, '-118.80', 'no'), offerIs(r, ID.flat150, '-150.00', 'no'), priceIs(r, '6310.00')) }),
+        check: (r) => all(noError(r), offerIs(r, ID.excl300, '-300.00', 'yes'), offerIs(r, ID.slabw1, '-118.80', 'no'), offerIs(r, ID.flat150, '-150.00', 'no'), offerIs(r, ID.disc5, '-52.00', 'no'), priceIs(r, '6310.00')) }),
       initStep({ offers: [ID.excl300, ID.disc5], expect: 'Buyer sends excl300 + disc5 at init: excl300 alone, quote.price 6310.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.excl300]), priceIs(r, '6310.00')) }),
       confirmStep(),
     ],
@@ -459,8 +459,8 @@ export const SCENARIOS = [
     cart: [{ id: ID.I1, count: 20 }, { id: ID.I8, count: 2 }],
     summary: 'No auto offer qualifies. The buyer sends discp10 + flat50 (both opt-in, additive): they stack.',
     steps: [
-      selectStep({ offers: [ID.discp10, ID.flat50], expect: 'discp10 (-104.00) + flat50 (-50.00) applied: quote.price 3086.00.',
-        check: (r) => all(noError(r), offerIs(r, ID.discp10, '-104.00'), offerIs(r, ID.flat50, '-50.00'), priceIs(r, '3086.00')) }),
+      selectStep({ offers: [ID.discp10, ID.flat50], expect: 'discp10 (-104.00) + flat50 (-50.00) applied, both auto = yes: quote.price 3086.00.',
+        check: (r) => all(noError(r), offerIs(r, ID.discp10, '-104.00', 'yes'), offerIs(r, ID.flat50, '-50.00', 'yes'), priceIs(r, '3086.00')) }),
       initStep({ expect: 'Buyer sends discp10 + flat50: both applied.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.discp10, ID.flat50]), priceIs(r, '3086.00')) }),
       confirmStep(),
     ],
@@ -481,8 +481,8 @@ export const SCENARIOS = [
     cart: [{ id: ID.I10, count: 13 }],
     summary: '52 kg of Surf Excel: slabw2 (auto, exclusive, -514.80) and excl300 (opt-in, exclusive, -300.00). The buyer sends excl300: its choice wins although slabw2 is bigger.',
     steps: [
-      selectStep({ offers: [ID.excl300], expect: 'excl300 applied (-300.00); slabw2 listed at -514.80 with auto = no: quote.price 6135.00.',
-        check: (r) => all(noError(r), offerIs(r, ID.excl300, '-300.00'), offerIs(r, ID.slabw2, '-514.80', 'no'), priceIs(r, '6135.00')) }),
+      selectStep({ offers: [ID.excl300], expect: 'excl300 applied (-300.00, auto = yes); slabw2 listed at -514.80 with auto = no: quote.price 6135.00.',
+        check: (r) => all(noError(r), offerIs(r, ID.excl300, '-300.00', 'yes'), offerIs(r, ID.slabw2, '-514.80', 'no'), priceIs(r, '6135.00')) }),
       initStep({ expect: 'Buyer sends excl300: quote.price 6135.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.excl300]), priceIs(r, '6135.00')) }),
       confirmStep(),
     ],
@@ -492,8 +492,8 @@ export const SCENARIOS = [
     cart: [{ id: ID.I2, count: 10 }],
     summary: 'The only auto offer is slab1 (exclusive). The buyer sends discp10 (opt-in, additive): its choice wins, slab1 is downgraded.',
     steps: [
-      selectStep({ offers: [ID.discp10], expect: 'discp10 applied (-200.00, capped); slab1 listed at -122.50 with auto = no: quote.price 2250.00.',
-        check: (r) => all(noError(r), offerIs(r, ID.discp10, '-200.00'), offerIs(r, ID.slab1, '-122.50', 'no'), priceIs(r, '2250.00')) }),
+      selectStep({ offers: [ID.discp10], expect: 'discp10 applied (-200.00, capped, auto = yes); slab1 listed at -122.50 with auto = no: quote.price 2250.00.',
+        check: (r) => all(noError(r), offerIs(r, ID.discp10, '-200.00', 'yes'), offerIs(r, ID.slab1, '-122.50', 'no'), priceIs(r, '2250.00')) }),
       initStep({ expect: 'Buyer sends discp10: quote.price 2250.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.discp10]), priceIs(r, '2250.00')) }),
       confirmStep(),
     ],
@@ -516,7 +516,7 @@ export const SCENARIOS = [
     summary: 'The buyer sends discp10 twice, expired1 (published but expired) and an unknown id. Invalid ids are skipped silently; discp10 applies once.',
     steps: [
       selectStep({ offers: [ID.discp10, ID.discp10, ID.expired1, 'NOPE'], expect: 'No error. discp10 applied once (-104.00); expired1 not listed: quote.price 936.00.',
-        check: (r) => all(noError(r), offerIs(r, ID.discp10, '-104.00'), fail(!offerLine(r, ID.expired1), 'expired1 listed'), priceIs(r, '936.00')) }),
+        check: (r) => all(noError(r), offerIs(r, ID.discp10, '-104.00', 'yes'), fail(!offerLine(r, ID.expired1), 'expired1 listed'), priceIs(r, '936.00')) }),
       initStep({ offers: [ID.discp10, ID.discp10, ID.expired1, 'NOPE'], expect: 'No error. Only discp10 applied: quote.price 936.00.',
         check: (r) => all(noError(r), quoteAddsUp(r), offersAre(r, [ID.discp10]), priceIs(r, '936.00')) }),
       confirmStep(),
