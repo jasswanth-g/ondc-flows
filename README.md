@@ -150,6 +150,10 @@ follow the retail-seller-service offers flow:
   With offer ids: the buyer wins over auto (the best selected exclusive alone, else the selected
   additive ones plus every auto additive one). Every applied line is sent with `auto: yes` (the
   ids the buyer sent included, opt-in ones too); a line that was not applied with `auto: no`.
+- **In the flows:** `/select` is where the buyer tries offers, so a flow accepts any selection
+  there (only an error fails it). `/init` confirms them: `on_init` must apply the ids the app sends
+  in `/init` that `on_select` listed (the best exclusive alone, else all), at `on_select`'s values,
+  with a breakup that adds up. `npm test` still checks the exact offers of each recommended cart.
 - **`/init`, `/confirm`:** only the ids the buyer sends in `order.offers` (auto offers are not
   auto-applied, so the buyer carries them forward), same exclusive rule, re-evaluated on the current
   cart. Only the applied offers are listed, and returned in `order.offers`.

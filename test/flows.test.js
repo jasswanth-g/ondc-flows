@@ -81,6 +81,25 @@ test('item inactive: re-selecting with the inactive item still in the cart is fl
   assert.match(problem, /still has I7/);
 });
 
+// Live, an offer flow accepts any selection at /select; /init is where the offers must match.
+test('offer flows: any selection at select, on_init confirms what the app sends', async () => {
+  const sc = SCENARIOS.find((x) => x.id === 'offer-optin-exclusive');
+  const state = newState(sc);
+  // The app sends no offer ids instead of the recommended excl300.
+  const own = { ...sc.steps[0], build: (e, s) => (s.selectRequest = R.select({ ...e, catalogProvider: s.catalog.find((p) => p.id === s.providerId), retailer: s.retailer, lines: s.cart })) };
+  assert.equal((await runStep(own, state, { ...env, send })).problem, null);
+  assert.ok((await runStep(own, newState(sc), { ...env, send, strict: true })).problem, 'strict still checks the recommended outcome');
+  // /init carries what on_select applied (flat150, the auto additive one): on_init applies it.
+  const init = await runStep(sc.steps[1], state, { ...env, send });
+  assert.equal(init.problem, null);
+  // An on_init that dropped the offer the app sent is flagged.
+  const order = init.reply.callbacks.at(-1).body.message.order;
+  order.offers = [];
+  order.quote.breakup = order.quote.breakup.filter((b) => b['@ondc/org/title_type'] !== 'offer');
+  order.quote.price.value = order.quote.breakup.reduce((t, b) => t + Number(b.price.value), 0).toFixed(2);
+  assert.match(sc.steps[1].check(init.reply, state), /applied \[\], expected \[flat150\]/);
+});
+
 test('every scenario is covered by at least one step check', () => {
   for (const s of SCENARIOS) assert.ok(s.steps.every((st) => st.check), s.id);
 });

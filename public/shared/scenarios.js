@@ -599,6 +599,36 @@ export const SCENARIOS = [
   },
 ];
 
+// ---- offers: /init confirms them -----------------------------------------------------------
+// On /select the buyer may try any offers, so a flow does not validate on_select's offers. /init is
+// where the buyer confirms its choice: on_init must apply the ids the app sends in /init that
+// on_select listed - the best exclusive one alone, else all of them - at on_select's values.
+const initConfirmsOffers = (reply, s) => {
+  const listed = new Map(breakup({ callbacks: [{ body: s.onSelect }] }).filter((b) => b['@ondc/org/title_type'] === 'offer')
+    .map((b) => [b['@ondc/org/item_id'], { value: b.price.value, additive: tagVal(b.item.tags, 'offer', 'additive') }]));
+  const sent = [...new Set((s.request?.message?.order?.offers ?? []).map((o) => o.id))].filter((id) => listed.has(id));
+  const exclusive = sent.filter((id) => listed.get(id).additive === 'no').sort((x, y) => Number(listed.get(x).value) - Number(listed.get(y).value));
+  const want = exclusive.length ? [exclusive[0]] : sent;
+  return all(noError(reply), quoteAddsUp(reply), onlyApplied(reply), offersAre(reply, want),
+    want.map((id) => fail(offerLine(reply, id)?.price.value === listed.get(id).value, `${label(id)} at ${offerLine(reply, id)?.price.value} in on_init, ${listed.get(id).value} in on_select`)).find(Boolean) ?? null);
+};
+// Offer flows: on_select only needs to answer; the exact offers of the recommended cart are still
+// verified by `npm test` (step.verify, run in strict mode).
+for (const sc of SCENARIOS.filter((x) => x.group === 'Offers')) {
+  for (const step of sc.steps) {
+    if (step.action === 'select') {
+      const expect = step.expect;
+      Object.assign(step, { verify: step.check, check: noError,
+        expect: `Any offer selection is accepted here; the offers are confirmed at /init. With the recommended cart and offers: ${expect}` });
+    }
+    if (step.action === 'init') {
+      const [verify, expect] = [step.check, step.expect];
+      Object.assign(step, { verify: (r, st) => all(initConfirmsOffers(r, st), verify(r, st)), check: initConfirmsOffers,
+        expect: `on_init applies the offers your app sends in /init, as on_select listed them (an exclusive one alone). With the recommended offers: ${expect}` });
+    }
+  }
+}
+
 // ---- recommended carts ------------------------------------------------------------------------
 // What to put in the cart so each flow completes smoothly. Any-items flows work with any cart, but
 // some need a particular shape: `target` is the item the seller mode hits (armed with ▶), and the
@@ -712,21 +742,24 @@ export { ensureCatalog };
 // Runs one step: builds, sends (with the scenario's seller mode), checks the ACK, absorbs, then
 // evaluates the step's expectation. Returns { request, reply, problem }; problem is null when the
 // outcome matched. `send(action, body, mode)`; `previewSend` (defaults to `send`) fetches the catalogue.
-export async function runStep(step, state, { bap, bpp, send, previewSend = send }) {
+// `strict` (the tests) also runs a step's `verify`: the exact outcome for the scenario's own cart.
+export async function runStep(step, state, { bap, bpp, send, previewSend = send, strict = false }) {
   if (step.needsCatalog) await ensureCatalog(state, { bap, previewSend });
   const request = step.build({ bap, bpp }, state);
   const reply = await send(step.action, request, { name: state.mode, items: state.target ? [state.target] : [] });
   if (reply.response?.message?.ack?.status !== 'ACK') {
     throw Object.assign(new Error(`${step.name}: NACK ${JSON.stringify(reply.response?.error)}`), { request, reply });
   }
+  state.request = request;
   step.absorb?.(state, reply);
-  return { request, reply, problem: step.check ? step.check(reply, state) : null };
+  const check = (strict && step.verify) || step.check;
+  return { request, reply, problem: check ? check(reply, state) : null };
 }
 
 export async function runScenario(scenario, { bap, bpp, send, previewSend, cart, target, onStep = () => {} }) {
   const state = newState(scenario, { cart, target });
   for (const step of scenario.steps) {
-    const result = await runStep(step, state, { bap, bpp, send, previewSend });
+    const result = await runStep(step, state, { bap, bpp, send, previewSend, strict: true });
     onStep({ step, ...result });
     if (result.problem) throw Object.assign(new Error(`${scenario.id} / ${step.name}: ${result.problem}`), result);
   }
@@ -780,6 +813,7 @@ export function trackLive(scenario, entries, { catalog, modeItems = [] }) {
         pickTarget(state);
       }
     }
+    state.request = entry.request;
     let problem = null;
     try {
       if (reply.response?.message?.ack?.status !== 'ACK') problem = `mock NACKed: ${JSON.stringify(reply.response?.error)}`;
