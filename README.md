@@ -33,6 +33,15 @@ Order flows take **any items**: the seller mode acts on whatever the app ordered
 or the items given to `/api/mock/mode`). Only offer flows name items, because each offer qualifies
 specific items.
 
+**Recommended cart:** an open flow card shows the seller, items and quantities that complete it
+smoothly (with prices, MOQ, cart value vs the seller's minimum order value and **Copy items** for
+the ids), and *Steps with this cart*: what to do in the app at each step and what the mock answers.
+For the seller-mode flows, ▶ arms the mode on the recommended item (highlighted), so it is the one
+the seller disables / runs out of / reduces. For example **Item inactive**: add I7 × 5 and I1 × 20
+from P1, I7 goes inactive at `/select`, remove I7 and select again: I1 alone still meets P1's ₹500
+minimum, so init and confirm go through. A cart with one item only would be empty after removing
+it. Re-selecting with the inactive (or out-of-stock) item still in the cart is flagged.
+
 ## Run locally
 
 ```bash
@@ -189,7 +198,7 @@ customer_id, or by phone_number + PAN, and returns credit, POC, customer and sch
 
 Each flow lists the calls your app makes and what the mock answers to each, tracked live once
 started. `npm test` runs every flow, every any-items flow with 15 random carts, every mode on other
-carts, and the live tracker against a buyer app's calls.
+carts, every flow with its recommended cart, and the live tracker against a buyer app's calls.
 
 | Group | Scenario | Seller |
 |---|---|---|
@@ -197,8 +206,8 @@ carts, and the live tracker against a buyer app's calls.
 | | Place order (positive) | select (2 delivery options) → init (credit) → confirm, `Accepted` |
 | | Place order - tomorrow delivery | Buyer picks F2 `Immediate Delivery` |
 | | Place order - walk-in, prepaid (P3) | No customer_id, `ON-ORDER` with a payment link |
-| | Item inactive | mode `item_inactive`, then re-select |
-| | Item out of stock | mode `out_of_stock`, then re-select |
+| | Item inactive | Two items; mode `item_inactive` disables one, the buyer removes it and re-selects |
+| | Item out of stock | Two items; mode `out_of_stock` on one, the buyer removes it and re-selects |
 | | Partial quantity | mode `partial_quantity`, then re-select |
 | | Price changed | mode `price_changed` |
 | | Minimum order value | Cart below the provider's minimum → **30023**; the buyer scales up and re-selects |

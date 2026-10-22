@@ -7,7 +7,7 @@ import { deliver } from '../lib/transport.js';
 import { authorizationHeader, signingConfig } from '../lib/signing.js';
 import { offerLines, OFFERS } from '../lib/offers.js';
 import { PROVIDERS } from '../lib/data.js';
-import { SCENARIOS, runScenario, trackLive } from '../public/shared/scenarios.js';
+import { SCENARIOS, runScenario, runStep, newState, trackLive, recommendation } from '../public/shared/scenarios.js';
 import * as R from '../public/shared/requests.js';
 import { RETAILERS } from '../public/shared/retailers.js';
 import { listOrders } from '../lib/activity.js';
@@ -56,6 +56,29 @@ test('any-items scenarios hold for random carts', async () => {
       assert.ok(state.cart.length > 0, sc.id);
     }
   }
+});
+
+// The recommended cart completes every flow, with the seller mode hitting the recommended item.
+test('recommended carts complete their flows', async () => {
+  const catalog = (await send('search', R.searchBroadcast({ bap: R.BAP }))).callbacks[0].body.message.catalog['bpp/providers'];
+  for (const sc of SCENARIOS.filter((x) => x.recommend)) {
+    const { lines, target } = sc.recommend;
+    const state = await runScenario(sc, { ...env, send, cart: lines, target });
+    assert.equal(state.target, target ?? lines[0].id, sc.id);
+    const rec = recommendation(sc, catalog);
+    assert.ok(rec.lines.every((l) => l.name && l.count >= Number(l.moq)), sc.id);
+    assert.equal(rec.steps.length, sc.steps.length, sc.id);
+    assert.ok(rec.steps.every((t) => t.buyer && t.expect), sc.id);
+  }
+});
+
+test('item inactive: re-selecting with the inactive item still in the cart is flagged', async () => {
+  const sc = SCENARIOS.find((x) => x.id === 'item-inactive');
+  const state = newState(sc, { cart: sc.recommend.lines, target: sc.recommend.target });
+  await runStep(sc.steps[0], state, { ...env, send });
+  const keepAll = { ...sc.steps[1], build: (e, s) => (s.selectRequest = R.select({ ...e, catalogProvider: s.catalog.find((p) => p.id === s.providerId), retailer: s.retailer, lines: s.cart, transactionId: s.selectRequest.context.transaction_id })) };
+  const { problem } = await runStep(keepAll, state, { ...env, send });
+  assert.match(problem, /still has I7/);
 });
 
 test('every scenario is covered by at least one step check', () => {

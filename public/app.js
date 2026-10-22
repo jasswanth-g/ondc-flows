@@ -1,4 +1,4 @@
-import { SCENARIOS, newState, expectText, buyerText, trackLive, PUSH_LABELS } from './shared/scenarios.js';
+import { SCENARIOS, newState, expectText, buyerText, trackLive, recommendation, PUSH_LABELS } from './shared/scenarios.js';
 import { RETAILERS, NEW_RETAILER, WALK_IN_RETAILER } from './shared/retailers.js';
 import { ID, label } from './shared/ids.js';
 import * as R from './shared/requests.js';
@@ -65,7 +65,7 @@ function infoChips() {
     chip('Active flow', sc ? sc.title : 'N/A'),
     ...(health ? [el('span', { class: `chip-kv ${health.store === 'postgres' && health.ok ? '' : 'warn'}` }, el('span', {}, 'Storage:'),
       el('b', {}, health.store === 'postgres' ? (health.ok ? `Postgres (${health.env})` : `Postgres error: ${health.error}`) : 'memory only'))] : []),
-    ...(sc && armed.mode !== 'normal' ? [chip('Seller mode', `${MODE_LABELS[armed.mode]}${armed.items?.length ? ` (${armed.items.join(', ')})` : ''}`)] : []),
+    ...(sc && armed.mode !== 'normal' ? [chip('Seller mode', `${MODE_LABELS[armed.mode]}${armed.items?.length ? ` (${armed.items.map(label).join(', ')})` : ''}`)] : []),
   );
 }
 
@@ -230,8 +230,29 @@ function flowCard(sc) {
       el('span', { class: 'pct' }, `${pct}%`),
       el('div', { class: 'flow-actions' }, play, stopBtn),
       el('span', { class: 'chev', 'aria-hidden': 'true' }, expanded ? '▴' : '▾')),
+    expanded ? recommendedPanel(sc) : null,
     expanded ? grid : null);
   return card;
+}
+
+// What to add in the app so the flow completes: seller, items and quantities, then each step.
+function recommendedPanel(sc) {
+  const rec = recommendation(sc, tracked.catalog);
+  if (!rec) return null;
+  const copyCart = () => navigator.clipboard?.writeText(json(rec.lines.map((l) => ({ id: l.id, quantity: { count: l.count } }))));
+  return el('div', { class: 'recommend' },
+    el('div', { class: 'recommend-head' }, el('b', {}, 'Recommended cart'),
+      el('span', { class: 'muted' }, 'Seller ', idTag(rec.provider.id), ` ${rec.provider.name} · retailer ${rec.retailer.shop_name ?? rec.retailer.name ?? 'walk-in'}`),
+      el('button', { class: 'ghost tiny', type: 'button', title: 'Copy the items with their ids', onclick: copyCart }, 'Copy items')),
+    el('table', { class: 'recommend-items' },
+      el('tbody', {}, rec.lines.map((l) => el('tr', { class: l.target ? 'target' : '' },
+        el('td', {}, idTag(l.id)), el('td', {}, l.name ?? ''), el('td', { class: 'num' }, `× ${l.count}`),
+        el('td', { class: 'num muted' }, `₹${l.price} · MOQ ${l.moq}`), el('td', { class: 'num' }, `₹${l.total}`),
+        el('td', {}, l.target ? el('span', { class: 'pill warn' }, `seller: ${MODE_LABELS[sc.mode] ?? 'affected'}`) : null)))),
+      el('tfoot', {}, el('tr', {}, el('td', { colspan: '4' }, el('span', { class: 'muted' }, `Seller minimum order value ₹${rec.minValue}`)), el('td', { class: 'num' }, el('b', {}, `₹${rec.value}`)), el('td', {})))),
+    rec.note ? el('p', { class: 'recommend-note' }, rec.note) : null,
+    el('details', { class: 'recommend-steps' }, el('summary', {}, 'Steps with this cart'),
+      el('ol', {}, rec.steps.map((t) => el('li', {}, t.buyer, el('div', { class: 'muted' }, `→ ${t.expect}`))))));
 }
 
 const openFlows = new Set();
@@ -312,7 +333,9 @@ function renderInspector() {
 // ---- start / stop ---------------------------------------------------------------------------
 async function start(sc) {
   if (!bapId()) return;
-  const m = await post('/api/mock/mode', { bap_id: bapId(), mode: sc.mode ?? 'normal', scenario: sc.id });
+  // The seller mode hits the recommended item when the app orders it (else the first item of the cart).
+  const items = sc.recommend?.target ? [sc.recommend.target] : undefined;
+  const m = await post('/api/mock/mode', { bap_id: bapId(), mode: sc.mode ?? 'normal', scenario: sc.id, items });
   if (m.error) return $('#targetHint').replaceChildren(el('span', { class: 'pill bad' }, m.error));
   armed = { mode: m.mode, items: m.items, scenario: m.scenario, at: m.at };
   tracked = { ...tracked, results: [], at: m.at };
@@ -684,8 +707,11 @@ function sellerSwitch(providerId) {
   ));
 }
 
-showTab(['flows', 'activity', 'catalogue', 'retailers'].includes(store.get('tab', '')) ? store.get('tab', '') : 'flows');
-getCatalog().then((c) => (tracked.catalog = c));
+showTab(['flows', 'orders', 'activity', 'catalogue', 'retailers'].includes(store.get('tab', '')) ? store.get('tab', '') : 'flows');
+getCatalog().then((c) => {
+  tracked.catalog = c;
+  renderFlows();
+});
 loadHealth();
 loadArmed();
 loadCallers();

@@ -112,7 +112,7 @@ const selectStep = ({ lines, offers, expect = 'Serviceable quote.', check, resel
     ? (Array.isArray(lines) ? `Change the cart to ${cartText(s, lines)}: the app sends /select again.` : 'Accept the seller\'s changes to the cart: the app sends /select again.')
     : s.anyItems
       ? `Add any items to the cart${s.mode !== 'normal' ? ` (the seller mode hits ${s.modeItems?.length ? s.modeItems.map(label).join(', ') : 'the first item in the cart'})` : ''} and open it: the app sends /select.`
-      : `Add ${cartText(s, lines ?? s.cart)} from ${label(s.providerId)} and open the cart: the app sends /select${offers ? ` with the offers ${offers.map(label).join(' + ')} selected` : ''}.`)),
+      : `Add ${cartText(s, lines ?? s.cart)} from ${label(s.providerId)} and open the cart: the app sends /select${offers ? ` with the offer${offers.length > 1 ? 's' : ''} ${offers.map(label).join(' + ')} selected` : ''}.`)),
   build: (env, s) => {
     const req = R.select({
       ...env, catalogProvider: providerOf(s), retailer: s.retailer,
@@ -132,7 +132,7 @@ const initStep = ({ name = 'init → on_init', fulfillmentId, paymentType, offer
   buyer: () => ['Go to checkout: the app sends /init',
     fulfillmentId ? ` with delivery option ${label(fulfillmentId)}` : '',
     paymentType === 'ON-ORDER' ? ', paying online (ON-ORDER)' : '',
-    offers ? ` with the offers ${offers.map(label).join(' + ')} selected` : ' keeping the offers on_select applied',
+    offers ? ` with the offer${offers.length > 1 ? 's' : ''} ${offers.map(label).join(' + ')} selected` : ' keeping the offers on_select applied',
     '.'].join(''),
   build: (env, s) => R.init({ ...env, selectRequest: s.selectRequest, onSelect: s.onSelect, retailer: s.retailer, paymentType, fulfillmentId, offers }),
   absorb: (s, reply) => (s.onInit = cbBody(reply)),
@@ -172,6 +172,15 @@ const cancelStep = () => ({
   expect: 'Order Cancelled, cancellation.reason.id 053 (buyer) - pre-order-service records it as cancelled by the CUSTOMER.',
   build: (env, s) => R.cancel({ ...env, onConfirm: s.onConfirm }),
   check: (reply) => fail(order(reply)?.state === 'Cancelled' && order(reply)?.cancellation?.reason?.id === '053', 'expected Cancelled with reason 053'),
+});
+
+// The buyer drops the item the seller can no longer supply and orders the rest - so the cart needs a
+// second item that alone meets the minimum order value (see RECOMMENDED).
+const removeTargetReselect = (why) => selectStep({
+  reselect: true, lines: (s) => R.linesFromQuote(s.onSelect.message.order.quote),
+  buyer: (s) => `Remove ${s.target ? label(s.target) : 'the affected item'} (${why}) from the cart, keep the other items and open the cart again: the app sends /select.`,
+  expect: (s) => `on_select without ${label(s.target)}: no error.`,
+  check: (r, s) => all(fail(!s.selectRequest.message.order.items.some((i) => i.id === s.target), `the cart still has ${label(s.target)} - remove it and select again`), noError(r)),
 });
 
 const placeOrder = () => [selectStep(), initStep(), confirmStep()];
@@ -221,7 +230,7 @@ export const SCENARIOS = [
   },
   {
     id: 'item-inactive', anyItems: true, group: 'Pre-order', title: 'Item inactive', providerId: P1, retailer: SHARMA, mode: 'item_inactive',
-    summary: 'The seller disables an item that is in the cart. It tells the buyer with an incremental on_search, and returns the item at qty 0.',
+    summary: 'Two items in the cart; the seller disables one of them (incremental on_search, then on_select with it at qty 0). The buyer removes the inactive item and completes the order with the other.',
     steps: [
       selectStep({ expect: (s) => `First an unsolicited incremental on_search (header inc) with ${label(s.target)} time.label "disable", then on_select with error 40002 and ${label(s.target)} at qty 0.`,
         check: (r, s) => {
@@ -229,18 +238,18 @@ export const SCENARIOS = [
           return all(fail(inc?.id === s.target && inc?.time.label === 'disable', `expected an inc on_search disabling ${label(s.target)}`),
             fail(errorCode(r) === '40002' && itemCount(r, s.target) === 0, `expected 40002 with ${label(s.target)} at 0`));
         } }),
-      reselectFromQuote('onSelect'),
+      removeTargetReselect('the seller disabled it'),
       initStep(),
       confirmStep(),
     ],
   },
   {
     id: 'out-of-stock', anyItems: true, group: 'Pre-order', title: 'Item out of stock', providerId: P2, retailer: LAKSHMI, mode: 'out_of_stock',
-    summary: 'The seller has none of the affected item left.',
+    summary: 'Two items in the cart; the seller has none of one of them left. The buyer removes it and completes the order with the other.',
     steps: [
       selectStep({ expect: (s) => `Error 40002, message [{"item_id":"${label(s.target)}","error":"40002"}]; ${label(s.target)} at qty 0.`,
         check: (r, s) => fail(errorCode(r) === '40002' && itemCount(r, s.target) === 0, `expected 40002 with ${label(s.target)} at 0`) }),
-      reselectFromQuote('onSelect'),
+      removeTargetReselect('out of stock'),
       initStep(),
       confirmStep(),
     ],
@@ -589,6 +598,58 @@ export const SCENARIOS = [
     ],
   },
 ];
+
+// ---- recommended carts ------------------------------------------------------------------------
+// What to put in the cart so each flow completes smoothly. Any-items flows work with any cart, but
+// some need a particular shape: `target` is the item the seller mode hits (armed with ▶), and the
+// other items alone stay at or above their MOQ and the seller's minimum order value
+// (P1 ₹500, P2 ₹2000, P3 ₹1500), so the order still goes through after the seller removes or
+// reduces the target. Flows with a fixed cart (offers, seller inactive) recommend that cart.
+const RECOMMENDED = {
+  'place-order': { lines: [{ id: ID.I1, count: 20 }, { id: ID.I6, count: 5 }] },
+  'delivery-tomorrow': { lines: [{ id: ID.I1, count: 20 }, { id: ID.I6, count: 5 }] },
+  'place-order-prepaid': { lines: [{ id: ID.I16, count: 5 }, { id: ID.I20, count: 10 }] },
+  'item-inactive': { lines: [{ id: ID.I7, count: 5 }, { id: ID.I1, count: 20 }], target: ID.I7,
+    note: 'Add both items: I7 goes inactive, I1 alone (₹1040) still meets P1\'s ₹500 minimum, so the order goes through without I7. With one item only, the cart is empty after removing it.' },
+  'out-of-stock': { lines: [{ id: ID.I13, count: 10 }, { id: ID.I10, count: 5 }], target: ID.I13,
+    note: 'Add both items: I13 runs out, I10 alone (₹2475) still meets P2\'s ₹2000 minimum.' },
+  'partial-quantity': { lines: [{ id: ID.I1, count: 40 }, { id: ID.I6, count: 5 }], target: ID.I1,
+    note: 'I1 × 40 comes back at 20 - still its MOQ (20), so the re-select is valid.' },
+  'price-changed': { lines: [{ id: ID.I12, count: 10 }, { id: ID.I9, count: 10 }], target: ID.I12,
+    note: 'I12 comes back at 5% more (273.00 instead of 260.00).' },
+  'min-order-value': { lines: [{ id: ID.I9, count: 10 }],
+    note: 'I9 × 10 is ₹1300, below P2\'s ₹2000 minimum. After the 30023, raise I9 to 20 (₹2600) and select again.' },
+  'init-qty-reduced': { lines: [{ id: ID.I10, count: 10 }, { id: ID.I12, count: 10 }], target: ID.I10,
+    note: 'I10 × 10 comes back at 5 in on_init - still its MOQ (5). Re-select with 5, then init again.' },
+  'confirm-rejected': { lines: [{ id: ID.I12, count: 10 }, { id: ID.I13, count: 10 }] },
+  'post-order': { lines: [{ id: ID.I1, count: 20 }, { id: ID.I6, count: 5 }] },
+  'buyer-cancel': { lines: [{ id: ID.I1, count: 20 }, { id: ID.I6, count: 5 }] },
+  'seller-cancel': { lines: [{ id: ID.I1, count: 20 }, { id: ID.I6, count: 5 }] },
+  'seller-inactive': { lines: [{ id: ID.I1, count: 20 }],
+    note: 'Build the cart before you press ▶ (or from your cached catalogue): P1 is deactivated as soon as the flow starts.' },
+};
+for (const sc of SCENARIOS) sc.recommend = RECOMMENDED[sc.id] ?? (sc.cart?.length ? { lines: sc.cart } : null);
+
+// The recommended cart priced from the catalogue, and what to do in the app at each step with it.
+export function recommendation(sc, catalog) {
+  const rec = sc.recommend;
+  const provider = catalog?.find((p) => p.id === sc.providerId);
+  if (!rec || !provider) return null;
+  const state = newState({ ...sc, anyItems: false }, { cart: rec.lines, target: rec.target });
+  Object.assign(state, { catalog, modeItems: rec.target ? [rec.target] : [] });
+  const lines = rec.lines.map((l) => {
+    const item = provider.items.find((i) => i.id === l.id);
+    return { id: l.id, name: item?.descriptor.name, count: l.count, price: item?.price.value, moq: item?.quantity.minimum.count,
+      total: (Number(item?.price.value ?? 0) * l.count).toFixed(2), target: l.id === rec.target };
+  });
+  const steps = sc.steps.map((step) => {
+    try { return { buyer: step.buyer(state), expect: expectText(step, state) }; } catch { return { buyer: '', expect: '' }; }
+  });
+  return {
+    provider: { id: provider.id, name: provider.descriptor.name }, retailer: sc.retailer, lines, target: rec.target, note: rec.note, steps,
+    value: lines.reduce((t, l) => t + Number(l.total), 0).toFixed(2), minValue: tagVal(provider.tags, 'order_value', 'min_value'),
+  };
+}
 
 // `cart` / `target` override the scenario's defaults (the playground's cart editor).
 // Any-items scenarios get a random cart once the catalogue is loaded (see randomCart).
