@@ -101,6 +101,7 @@ function refreshTarget() {
 
 async function loadArmed() {
   armed = null;
+  loadCompleted();
   if (bapId()) {
     const m = await fetch(`/api/mock/mode?bap_id=${encodeURIComponent(bapId())}`).then((r) => r.json());
     armed = { mode: m.mode, items: m.items ?? [], scenario: m.scenario, at: m.at };
@@ -189,7 +190,8 @@ function flowCard(sc) {
     const r = results[c.i];
     return r && (c.side === 'send' ? r.phase !== 'waiting' : r.phase === 'completed');
   }).length;
-  const pct = running ? Math.round((doneCards / cards.length) * 100) : 0;
+  const complete = completedFlows.has(sc.id);
+  const pct = running ? Math.round((doneCards / cards.length) * 100) : complete ? 100 : 0;
 
   const play = el('button', { class: 'round play', type: 'button', 'data-needs-bap': '', 'data-title': running ? 'Restart this flow' : 'Start this flow', 'aria-label': `Start ${sc.title}` }, running ? '↻' : '▶');
   play.onclick = (e) => { e.stopPropagation(); start(sc); };
@@ -197,11 +199,13 @@ function flowCard(sc) {
 
   const grid = el('div', { class: 'call-grid' });
   for (let k = 0; k < cards.length; k++) {
-    const c = cards[k];
+    // The pair below advances k, so the click handlers keep their own index.
+    const idx = k;
+    const c = cards[idx];
     const r = results[c.i];
     const [text, cls] = cardStatus(c, r, running && c.i === nextStep);
-    const node = el('button', { class: `call-card ${cls} ${c.unsolicited ? 'wide' : ''} ${selected?.scId === sc.id && selected.cardIndex === k ? 'selected' : ''}`, type: 'button',
-      onclick: () => { selected = { scId: sc.id, cardIndex: k }; renderFlows(); } },
+    const node = el('button', { class: `call-card ${cls} ${c.unsolicited ? 'wide' : ''} ${selected?.scId === sc.id && selected.cardIndex === idx ? 'selected' : ''}`, type: 'button',
+      onclick: () => { selected = { scId: sc.id, cardIndex: idx }; renderFlows(); } },
       el('div', { class: 'call-top' }, el('span', { class: 'call-name' }, el('span', { class: 'muted' }, `${k + 1}: `), c.label),
         c.unsolicited ? el('span', { class: 'tag' }, 'UNSOLICITED') : null),
       el('div', { class: 'call-bottom' }, el('span', { class: `who ${c.side}` }, c.side === 'send' ? 'YOU SEND' : 'MOCK'), el('span', { class: `status ${cls}` }, text)));
@@ -209,8 +213,8 @@ function flowCard(sc) {
       const n2 = cards[k + 1];
       const r2 = results[n2.i];
       const [t2, c2] = cardStatus(n2, r2, running && n2.i === nextStep);
-      const node2 = el('button', { class: `call-card ${c2} ${selected?.scId === sc.id && selected.cardIndex === k + 1 ? 'selected' : ''}`, type: 'button',
-        onclick: () => { selected = { scId: sc.id, cardIndex: k + 1 }; renderFlows(); } },
+      const node2 = el('button', { class: `call-card ${c2} ${selected?.scId === sc.id && selected.cardIndex === idx + 1 ? 'selected' : ''}`, type: 'button',
+        onclick: () => { selected = { scId: sc.id, cardIndex: idx + 1 }; renderFlows(); } },
         el('div', { class: 'call-top' }, el('span', { class: 'call-name' }, el('span', { class: 'muted' }, `${k + 2}: `), n2.label)),
         el('div', { class: 'call-bottom' }, el('span', { class: 'who mock' }, 'MOCK'), el('span', { class: `status ${c2}` }, t2)));
       grid.append(el('div', { class: 'call-pair' }, node, el('span', { class: 'swap', 'aria-hidden': 'true' }, '⇄'), node2));
@@ -220,11 +224,13 @@ function flowCard(sc) {
     }
   }
 
-  const expanded = running || openFlows.has(sc.id);
-  const card = el('section', { class: `flow ${running ? 'running' : ''}` },
+  // A completed flow turns green and folds away; its head still opens it.
+  const expanded = openFlows.has(sc.id) || (running && !complete);
+  const card = el('section', { class: `flow ${running && !complete ? 'running' : ''} ${complete ? 'complete' : ''}` },
     el('div', { class: 'flow-head', onclick: () => { openFlows.has(sc.id) ? openFlows.delete(sc.id) : openFlows.add(sc.id); renderFlows(); } },
       el('div', { class: 'flow-text' },
-        el('div', { class: 'flow-title' }, el('h3', {}, sc.title), sc.mode ? el('span', { class: 'tag' }, MODE_LABELS[sc.mode]) : null),
+        el('div', { class: 'flow-title' }, el('h3', {}, sc.title), sc.mode ? el('span', { class: 'tag' }, MODE_LABELS[sc.mode]) : null,
+          complete ? el('span', { class: 'tag ok' }, '✓ Completed') : null),
         el('div', { class: 'progress' }, el('span', { style: `width:${pct}%` })),
         el('p', { class: 'muted' }, sc.summary)),
       el('span', { class: 'pct' }, `${pct}%`),
@@ -256,6 +262,13 @@ function recommendedPanel(sc) {
 }
 
 const openFlows = new Set();
+// Flows the app completed without an unexpected answer, per bap_uri / bap_id (this browser only).
+let completedFlows = new Set();
+const completedKey = () => `completed:${bapId()}`;
+function loadCompleted() {
+  try { completedFlows = new Set(JSON.parse(store.get(completedKey(), '[]'))); } catch { completedFlows = new Set(); }
+}
+const saveCompleted = () => store.set(completedKey(), JSON.stringify([...completedFlows]));
 
 function renderFlows() {
   const list = $('#flowList');
@@ -341,6 +354,8 @@ async function start(sc) {
   tracked = { ...tracked, results: [], at: m.at };
   selected = null;
   fired.clear();
+  completedFlows.delete(sc.id);
+  saveCompleted();
   openFlows.add(sc.id);
   renderFlows();
   poll(true);
@@ -374,6 +389,12 @@ function track(activity) {
     setTimeout(() => post('/api/mock/push', body, { 'X-Mock-Deliver': 'wait' }).then(() => poll(true)), 1200);
   }
   const done = next === -1 && results.every((r) => r.phase !== 'running');
+  if (done && !results.some((r) => r.problem) && !completedFlows.has(sc.id)) {
+    completedFlows.add(sc.id);
+    saveCompleted();
+    openFlows.delete(sc.id);
+    lastKey = '';
+  }
   $('#liveState').textContent = done ? (results.some((r) => r.problem) ? `${sc.title}: completed with unexpected answers` : `${sc.title}: completed`) : `${sc.title}: running · live`;
   if (key !== lastKey) {
     lastKey = key;
