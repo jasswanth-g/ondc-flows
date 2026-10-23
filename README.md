@@ -114,7 +114,7 @@ items the buyer actually ordered: the ones named for the mode, else the first it
 | Mode | At | What the seller does to the affected item |
 |---|---|---|
 | `normal` | | Nothing: in stock at catalogue prices |
-| `item_inactive` | `/select` | Disables it: unsolicited incremental `on_search` (`label: disable`), then `on_select` with qty 0 + **40002** |
+| `item_inactive` | `/select` | Inactive: `on_select` with it at qty 0 + **40002** (no `on_search`) |
 | `out_of_stock` | `/select` | qty 0 + **40002** |
 | `partial_quantity` | `/select` | Half the ordered qty + **40002** |
 | `price_changed` | `/select` | 5% above the catalogue price |
@@ -188,6 +188,12 @@ up to 12) and order ids (alphanumeric, up to 32, issued by the buyer app).
 P1 offers two delivery options: F1 `Standard Delivery` (beat, P2D) and F2 `Immediate Delivery`
 (tomorrow, P1D). P2 and P3 offer F1 only.
 
+Every item carries a `pack_config` tag: `set`, `case` and one or more `selling_unit` values (in
+pieces), which the buyer app offers as add tiers ("1 X 10"). They are chosen so each item's MOQ and
+every recommended quantity are a few taps (e.g. I1: 10 / 20; I2 and I10: 1 / 5 / 10; I19: 3 / 6).
+The Catalogue tab lists them, and the recommended cart shows the taps per line (I1 × 20 = 1 X 20).
+The seller does not enforce selling units: any quantity within MOQ - max is accepted.
+
 ## Seeded retailers
 
 | Retailer | customer_id | phone | PAN | Credit |
@@ -226,7 +232,7 @@ carts, every flow with its recommended cart, and the live tracker against a buye
 | | Freebie | `freebie1`: free I7 with 10 × I6 (-380.00) |
 | | Buy X get Y | `buy2get1` on Frooti (-300.00) |
 | | Combo | `combo1`: Atta + both B Natural packs |
-| | Init - exclusive blocks additive | Select applies slab2; the buyer sends freebie1 + discp10 at init: freebie1 alone |
+| | Init - customer switches the exclusive offer | Select applies slab2; the customer picks freebie1 alone at init: freebie1 applied, slab2 dropped |
 | | Select 1-9 | The nine on_select cases of the offers flow: auto priority, opt-in additive, exclusive, mixed ids, opt-in only, single auto exclusive, buyer override (exclusive and additive), best auto exclusive |
 | | Edge - invalid ids / cart changed | Unknown, expired, duplicate ids skipped; a stale offer at init dropped |
 | Retailer (P2P) | customer_id / phone + PAN / new retailer | Optional P2P answers |

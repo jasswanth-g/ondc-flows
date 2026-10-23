@@ -5,7 +5,7 @@ import { P1, P2, P3, ID, label } from './ids.js';
 const [SHARMA, LAKSHMI] = RETAILERS;
 
 // ---- reading replies ------------------------------------------------------------------------
-// The callback a step is about is the last one (a select can be preceded by an incremental on_search).
+// The callback a step is about is the last one.
 const cbBody = (reply, i = reply.callbacks.length - 1) => reply.callbacks[i]?.body;
 const order = (reply) => cbBody(reply)?.message?.order;
 const errorCode = (reply) => cbBody(reply)?.error?.code;
@@ -52,7 +52,12 @@ const scaleToMov = (s) => {
   return s.cart.map((l) => ({ ...l, count: l.count * factor }));
 };
 
-const cartText = (s, lines) => lines.map((l) => `${label(l.id)} ${catalogItem(s, l.id)?.descriptor.name ?? ''} × ${l.count}`).join(', ');
+// Each line with the selling-unit taps that add it in the app (e.g. "2 X 10").
+const cartText = (s, lines) => lines.map((l) => {
+  const item = catalogItem(s, l.id);
+  const taps = unitTaps(sellingUnits(item), l.count);
+  return `${label(l.id)} ${item?.descriptor.name ?? ''} × ${l.count}${taps ? ` (${taps.map((t) => `${t.times} X ${t.unit}`).join(' + ')})` : ''}`;
+}).join(', ');
 
 // ---- steps ----------------------------------------------------------------------------------
 // A step: { name, action, buyer(state), expect, build(env, state), absorb(state, reply), check(reply, state) }.
@@ -230,14 +235,11 @@ export const SCENARIOS = [
   },
   {
     id: 'item-inactive', anyItems: true, group: 'Pre-order', title: 'Item inactive', providerId: P1, retailer: SHARMA, mode: 'item_inactive',
-    summary: 'Two items in the cart; the seller disables one of them (incremental on_search, then on_select with it at qty 0). The buyer removes the inactive item and completes the order with the other.',
+    summary: 'Two items in the cart; one of them is inactive at the seller: on_select returns it at qty 0 with 40002. The buyer removes the inactive item and completes the order with the other.',
     steps: [
-      selectStep({ expect: (s) => `First an unsolicited incremental on_search (header inc) with ${label(s.target)} time.label "disable", then on_select with error 40002 and ${label(s.target)} at qty 0.`,
-        check: (r, s) => {
-          const inc = r.callbacks.find((c) => c.headers?.['X-ONDC-Search-Response'] === 'inc')?.body.message.catalog['bpp/providers'][0].items[0];
-          return all(fail(inc?.id === s.target && inc?.time.label === 'disable', `expected an inc on_search disabling ${label(s.target)}`),
-            fail(errorCode(r) === '40002' && itemCount(r, s.target) === 0, `expected 40002 with ${label(s.target)} at 0`));
-        } }),
+      selectStep({ expect: (s) => `on_select only (no on_search): error 40002 and ${label(s.target)} at qty 0.`,
+        check: (r, s) => all(fail(r.callbacks.length === 1, 'expected on_select only'),
+          fail(errorCode(r) === '40002' && itemCount(r, s.target) === 0, `expected 40002 with ${label(s.target)} at 0`)) }),
       removeTargetReselect('the seller disabled it'),
       initStep(),
       confirmStep(),
@@ -398,13 +400,13 @@ export const SCENARIOS = [
     ],
   },
   {
-    id: 'offer-stacking', group: 'Offers', title: 'Init - exclusive blocks additive', providerId: P1, retailer: SHARMA,
+    id: 'offer-stacking', group: 'Offers', title: 'Init - customer switches the exclusive offer', providerId: P1, retailer: SHARMA,
     cart: [{ id: ID.I2, count: 20 }, { id: ID.I6, count: 10 }],
-    summary: 'The cart qualifies for slab2 and freebie1 (auto, exclusive) and discp10 (opt-in, additive). An exclusive offer blocks every other one, additive ones included.',
+    summary: 'The cart qualifies for slab2 and freebie1 (auto, exclusive) and discp10 (opt-in, additive). on_select applies slab2; at checkout the customer picks freebie1 instead - an exclusive offer is selected on its own.',
     steps: [
-      selectStep({ expect: 'All three listed. Applied: slab2 only (the best auto exclusive, -490.00); freebie1 sent as auto = no: quote.price 8010.00.',
-        check: (r) => all(fail([ID.slab2, ID.freebie1, ID.discp10].every((id) => offerLine(r, id)), 'expected slab2, freebie1 and discp10 listed'), offerIs(r, ID.freebie1, '-380.00', 'no'), priceIs(r, '8010.00')) }),
-      initStep({ offers: [ID.freebie1, ID.discp10], expect: 'Buyer sends freebie1 + discp10: freebie1 is exclusive, so only freebie1 applies (discp10 blocked, slab2 not sent): quote.price 8120.00.',
+      selectStep({ expect: 'All three listed. Applied: slab2 only (the best auto exclusive, -490.00); freebie1 and discp10 sent as auto = no: quote.price 8010.00.',
+        check: (r) => all(fail([ID.slab2, ID.freebie1, ID.discp10].every((id) => offerLine(r, id)), 'expected slab2, freebie1 and discp10 listed'), offerIs(r, ID.slab2, '-490.00', 'yes'), offerIs(r, ID.freebie1, '-380.00', 'no'), priceIs(r, '8010.00')) }),
+      initStep({ offers: [ID.freebie1], expect: 'Buyer sends freebie1 alone: only freebie1 applies (slab2 not sent, so dropped): quote.price 8120.00.',
         check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.freebie1]), priceIs(r, '8120.00')) }),
       confirmStep(),
     ],
@@ -450,7 +452,7 @@ export const SCENARIOS = [
     steps: [
       selectStep({ offers: [ID.slabw1, ID.excl300, ID.disc5], expect: 'Only excl300 applied (-300.00 beats slabw1 -118.80); disc5 and flat150 blocked: quote.price 6310.00.',
         check: (r) => all(noError(r), offerIs(r, ID.excl300, '-300.00', 'yes'), offerIs(r, ID.slabw1, '-118.80', 'no'), offerIs(r, ID.flat150, '-150.00', 'no'), offerIs(r, ID.disc5, '-52.00', 'no'), priceIs(r, '6310.00')) }),
-      initStep({ offers: [ID.excl300, ID.disc5], expect: 'Buyer sends excl300 + disc5 at init: excl300 alone, quote.price 6310.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.excl300]), priceIs(r, '6310.00')) }),
+      initStep({ expect: 'Buyer confirms excl300 alone (an exclusive offer is sent on its own): quote.price 6310.00.', check: (r) => all(quoteAddsUp(r), onlyApplied(r), offersAre(r, [ID.excl300]), priceIs(r, '6310.00')) }),
       confirmStep(),
     ],
   },
@@ -660,6 +662,21 @@ const RECOMMENDED = {
 };
 for (const sc of SCENARIOS) sc.recommend = RECOMMENDED[sc.id] ?? (sc.cart?.length ? { lines: sc.cart } : null);
 
+// An item's selling units (pack_config selling_unit, in pieces), largest first.
+export const sellingUnits = (item) => (item?.tags?.find((t) => t.code === 'pack_config')?.list ?? [])
+  .filter((e) => e.code === 'selling_unit').map((e) => Number(e.value)).sort((a, b) => b - a);
+// How to reach `count` pieces with the selling units, largest first: [{ unit, times }], or null.
+export function unitTaps(units, count) {
+  const taps = [];
+  let left = count;
+  for (const unit of units) {
+    const times = Math.floor(left / unit);
+    if (times) taps.push({ unit, times });
+    left -= times * unit;
+  }
+  return units.length && !left ? taps : null;
+}
+
 // The recommended cart priced from the catalogue, and what to do in the app at each step with it.
 export function recommendation(sc, catalog) {
   const rec = sc.recommend;
@@ -670,7 +687,7 @@ export function recommendation(sc, catalog) {
   const lines = rec.lines.map((l) => {
     const item = provider.items.find((i) => i.id === l.id);
     return { id: l.id, name: item?.descriptor.name, count: l.count, price: item?.price.value, moq: item?.quantity.minimum.count,
-      total: (Number(item?.price.value ?? 0) * l.count).toFixed(2), target: l.id === rec.target };
+      total: (Number(item?.price.value ?? 0) * l.count).toFixed(2), target: l.id === rec.target, units: sellingUnits(item), taps: unitTaps(sellingUnits(item), l.count) };
   });
   const steps = sc.steps.map((step) => {
     try { return { buyer: step.buyer(state), expect: expectText(step, state) }; } catch { return { buyer: '', expect: '' }; }

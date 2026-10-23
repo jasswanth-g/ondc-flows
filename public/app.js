@@ -252,7 +252,8 @@ function recommendedPanel(sc) {
       el('button', { class: 'ghost tiny', type: 'button', title: 'Copy the items with their ids', onclick: copyCart }, 'Copy items')),
     el('table', { class: 'recommend-items' },
       el('tbody', {}, rec.lines.map((l) => el('tr', { class: l.target ? 'target' : '' },
-        el('td', {}, idTag(l.id)), el('td', {}, l.name ?? ''), el('td', { class: 'num' }, `× ${l.count}`),
+        el('td', {}, idTag(l.id)), el('td', {}, l.name ?? ''),
+        el('td', { class: 'num', title: `Selling units ${l.units.join(', ') || 'none'}` }, `× ${l.count}`, l.taps ? el('div', { class: 'muted tiny-text' }, l.taps.map((t) => `${t.times} X ${t.unit}`).join(' + ')) : null),
         el('td', { class: 'num muted' }, `₹${l.price} · MOQ ${l.moq}`), el('td', { class: 'num' }, `₹${l.total}`),
         el('td', {}, l.target ? el('span', { class: 'pill warn' }, `seller: ${MODE_LABELS[sc.mode] ?? 'affected'}`) : null)))),
       el('tfoot', {}, el('tr', {}, el('td', { colspan: '4' }, el('span', { class: 'muted' }, `Seller minimum order value ₹${rec.minValue}`)), el('td', { class: 'num' }, el('b', {}, `₹${rec.value}`)), el('td', {})))),
@@ -662,6 +663,14 @@ function offersTable(p) {
 }
 
 let catalogueLoaded = false;
+// pack_config: set / case size and the selling units the app offers as add tiers.
+function packText(item) {
+  const list = item.tags?.find((t) => t.code === 'pack_config')?.list ?? [];
+  const val = (code) => list.find((e) => e.code === code)?.value;
+  const units = list.filter((e) => e.code === 'selling_unit').map((e) => e.value);
+  return list.length ? `set ${val('set')} · case ${val('case')} · ${units.join(' / ')}` : '—';
+}
+
 async function loadCatalogue() {
   if (catalogueLoaded) return;
   catalogueLoaded = true;
@@ -680,6 +689,7 @@ async function loadCatalogue() {
       el('td', { class: 'num' }, `₹${i.price.value}`),
       el('td', { class: 'num' }, `₹${i.price.maximum_value}`),
       el('td', { class: 'num' }, `${i.quantity.minimum.count} – ${i.quantity.maximum.count}`),
+      el('td', {}, packText(i)),
     ));
     box.append(el('section', { class: 'card provider' },
       el('header', {},
@@ -690,7 +700,7 @@ async function loadCatalogue() {
         sellerSwitch(p.id),
       ),
       el('div', { class: 'table-wrap' }, el('table', {},
-        el('thead', {}, el('tr', {}, ...['', 'id', 'name', 'variant', 'category', 'location', 'price', 'MRP', 'MOQ – max'].map((h) => el('th', {}, h)))),
+        el('thead', {}, el('tr', {}, ...['', 'id', 'name', 'variant', 'category', 'location', 'price', 'MRP', 'MOQ – max', 'pack (set · case · selling units)'].map((h) => el('th', {}, h)))),
         el('tbody', {}, rows),
       )),
       offersTable(p),

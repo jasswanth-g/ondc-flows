@@ -7,7 +7,7 @@ import { deliver } from '../lib/transport.js';
 import { authorizationHeader, signingConfig } from '../lib/signing.js';
 import { offerLines, OFFERS } from '../lib/offers.js';
 import { PROVIDERS } from '../lib/data.js';
-import { SCENARIOS, runScenario, runStep, newState, trackLive, recommendation } from '../public/shared/scenarios.js';
+import { SCENARIOS, runScenario, runStep, newState, trackLive, recommendation, sellingUnits, unitTaps } from '../public/shared/scenarios.js';
 import * as R from '../public/shared/requests.js';
 import { RETAILERS } from '../public/shared/retailers.js';
 import { listOrders } from '../lib/activity.js';
@@ -98,6 +98,19 @@ test('offer flows: any selection at select, on_init confirms what the app sends'
   order.quote.breakup = order.quote.breakup.filter((b) => b['@ondc/org/title_type'] !== 'offer');
   order.quote.price.value = order.quote.breakup.reduce((t, b) => t + Number(b.price.value), 0).toFixed(2);
   assert.match(sc.steps[1].check(init.reply, state), /applied \[\], expected \[flat150\]/);
+});
+
+// Every item publishes its pack config; each recommended quantity is reachable with its selling units.
+test('items carry selling units that reach the recommended quantities', async () => {
+  const catalog = (await send('search', R.searchBroadcast({ bap: R.BAP }))).callbacks[0].body.message.catalog['bpp/providers'];
+  for (const item of catalog.flatMap((p) => p.items)) {
+    const units = sellingUnits(item);
+    assert.ok(units.length, `${item.id} has no selling_unit`);
+    assert.ok(unitTaps(units, Number(item.quantity.minimum.count)), `${item.id}: MOQ not reachable with ${units}`);
+  }
+  for (const sc of SCENARIOS.filter((x) => x.recommend)) {
+    for (const l of recommendation(sc, catalog).lines) assert.ok(l.taps, `${sc.id}: ${l.id} × ${l.count} not reachable with ${l.units}`);
+  }
 });
 
 test('every scenario is covered by at least one step check', () => {
@@ -379,13 +392,14 @@ test('item inactive: re-select on a new transaction keeps the first item disable
   const lines = [{ id: ID.I1, count: 20 }, { id: ID.I2, count: 10 }];
 
   const first = await send('select', R.select({ bap, bpp: env.bpp, catalogProvider: p1, retailer, lines }));
+  assert.deepEqual(first.callbacks.map((c) => c.body.context.action), ['on_select'], 'no on_search');
   assert.equal(first.callbacks.at(-1).body.error.code, '40002');
   assert.deepEqual([qty(first, ID.I1), qty(first, ID.I2)], [0, 10]);
 
-  // New transaction, same items: I1 is still inactive, I2 is not newly disabled.
+  // New transaction, same items: I1 is still inactive.
   const again = await send('select', R.select({ bap, bpp: env.bpp, catalogProvider: p1, retailer, lines }));
   assert.deepEqual([qty(again, ID.I1), qty(again, ID.I2)], [0, 10]);
-  assert.equal(again.callbacks.length, 1, 'no second incremental disable');
+  assert.equal(again.callbacks.length, 1, 'on_select only');
 
   // New transaction without I1: goes through.
   const onlyB = await send('select', R.select({ bap, bpp: env.bpp, catalogProvider: p1, retailer, lines: [{ id: ID.I2, count: 10 }] }));

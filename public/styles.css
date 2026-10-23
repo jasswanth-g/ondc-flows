@@ -294,3 +294,4 @@ button.tiny { padding: 2px 8px; font-size: 12px; margin-left: auto; }
 .flow.complete .pct { color: var(--ok); }
 .tag.ok { color: var(--ok); border-color: var(--ok); }
 .insp-tabs .insp-copy { margin-left: auto; align-self: center; border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; color: var(--accent); }
+.tiny-text { font-size: 11px; }
